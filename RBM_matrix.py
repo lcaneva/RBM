@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from pudb import set_trace
+from scipy import special
 
 
 ##################################################
@@ -33,13 +34,13 @@ class BaseRBM:
             
             # Initialize visible layer
             self.v = np.empty( N+1, dtype = float )
+            self.vp = np.empty( N+1, dtype = float )
             
             # Initialize hidden layer
             self.h = np.empty( M+1, dtype = float )
             
             # Initialize probabilities vectors
             if not( isinstance( self, ReLU_RBM ) ):
-                self.vp = np.empty( N+1, dtype = float )
                 self.hp = np.empty( M+1, dtype = float )
                         
             """
@@ -92,16 +93,16 @@ class BaseRBM:
     def fit( self, X_train, X_test, LA , SGS,  epsilon, alpha, lambda_x, nEpochs, c_e, c_a, period, plots  ):
         # Initialize counter for the energies and sampling period
         counter = 0
-        period_en = 10
+        period_ovf = 10
         # Size of the input mini-batch
         sizeMB = len( X_train )
 
         # Initialize arrays for the statistics
         MRE = np.zeros( nEpochs, dtype = float )
         nCorrect = np.zeros( nEpochs, dtype = float )
-        p_arr = np.zeros( int(nEpochs/period_en), dtype = float )        
-        energy_train = np.zeros( int(nEpochs/period_en), dtype = float )
-        energy_test = np.zeros( int(nEpochs/period_en), dtype = float )        
+        p_arr = np.zeros( int(nEpochs/period_ovf), dtype = float )        
+        ovf_train = np.zeros( int(nEpochs/period_ovf), dtype = float )
+        ovf_test = np.zeros( int(nEpochs/period_ovf), dtype = float )        
         velocity = np.zeros( (self.N+1, self.M+1) )        
         
         # Iterate through X_train nEpochs times
@@ -137,9 +138,8 @@ class BaseRBM:
                 
             # Compute the energies and the sparsity
             if plots:
-                if t % period_en == 0:
-                    if not( isinstance( self, ReLU_RBM ) ):
-                        energy_train[counter], energy_test[counter] = self.evaluateOverfitting( X_train, X_test )
+                if t % period_ovf == 0:
+                    ovf_train[counter], ovf_test[counter] = self.monitorOverfitting( X_train, X_test )
                     p_arr[counter], aux, T = self.analyzeWeights() 
                     counter += 1
 
@@ -163,20 +163,21 @@ class BaseRBM:
             axarr[1].set_xlabel('Epochs')
             # Monitor the sparsity
             plt.figure()
-            plt.plot([period_en*i for i in range( len( p_arr ) )], p_arr )
+            plt.plot([period_ovf*i for i in range( len( p_arr ) )], p_arr )
             plt.ylabel('Sparsity')
             plt.xlabel('Epochs')
             plt.show()            
             # Monitor the overfitting
+            plt.figure()
+            plt.plot([period_ovf*i for i in range( len( ovf_train ) )], ovf_train, label="Training set" )
+            plt.plot([period_ovf*i for i in range( len( ovf_test ) )], ovf_test, label = "Test set")
+            plt.legend()
             if not( isinstance( self, ReLU_RBM ) ):
-                plt.figure()
-                plt.plot([period_en*i for i in range( len( energy_train ) )], energy_train, label="Training set" )
-                plt.plot([period_en*i for i in range( len( energy_test ) )], energy_test, label = "Test set")
-                plt.legend()
                 plt.ylabel('Average free energy')
-                plt.xlabel('Epochs')
-                plt.show()
-
+            else:
+                plt.ylabel('Log-likelihood')
+            plt.xlabel('Epochs')
+            plt.show()
     """
     Regularization function.
     -----------------------------------
@@ -342,8 +343,20 @@ class BaseRBM:
                 # Redefine visible states
                 self.v = np.zeros_like( self.vp ) 
                 self.v[ self.vp >= y ] = 1
-        
-                
+
+    """
+    Compute free energy of a given set or example.
+    -----------------------------------------------
+    """
+    def __freeEnergy(self, X):
+        if X.ndim == 1:
+            net = np.dot( self.W.T, X )
+            tmp = np.log(1+np.exp(net))
+            return  -np.dot( self.W.T[0], X) - np.sum( tmp )
+        else:
+            net = np.dot( X, self.W )
+            energies = -np.dot( X, self.W[:,0]) - np.sum( np.log(1+np.exp(net)), axis = 1  )
+            return np.sum( energies )        
 
     """
     Compute average free energies.
@@ -356,23 +369,19 @@ class BaseRBM:
     of the average free energies of the two set of visibile instances 
     to monitor the overfitting.
     """
-    def evaluateOverfitting( self, X_train, X_test):
-        def freeEnergy(v):
-            net = np.dot( self.W.T, v )
-            tmp = np.log(1+np.exp(net))
-            return  -np.dot( self.W.T[0], v) - np.sum( tmp )
+    def monitorOverfitting( self, X_train, X_test):
+            
+        # DEBUG
+        set_trace()
+        if not( isinstance( self, ReLU_RBM ) ):            
+            avg_train = self.__freeEnergy( X_train )/len(X_train)
+            avg_test =  self.__freeEnergy( X_train )/len(X_test)
+        else:
+            pass
+            #avg_train = self._ReLU_RBM__freeEnergy( X_train )/len(X_train)
+            #avg_test =  self.__freeEnergy( X_train )/len(X_test)
         
-        energy_tr = 0
-        for ind in range( len( X_train ) ):
-            energy_tr += freeEnergy( X_train[ind] )
-        avg_tr = energy_tr/len(X_train)
-        
-        energy_test = 0
-        for ind in range( len( X_test) ):
-            energy_test += freeEnergy( X_test[ind] )
-        avg_test = energy_test/len(X_test)
-        
-        return avg_tr, avg_test
+        return avg_train, avg_test
 
     """
     Compute the partecipation ratio PR_a
@@ -485,6 +494,26 @@ class BaseRBM:
 # with rectified linear hidden units
 ##################################################
 class ReLU_RBM( BaseRBM ):
+    def __energy( self, v, h ):
+        # Compute the energy of the current state of the machine
+        en_W = np.dot( np.dot( self.W[1:,1:], h[1:] ), v[1:] )
+        # Bernoulli potential (binary visible units): v_i * g_i 
+        en_g = np.dot( v, self.W[:,0] )
+        # ReLU potential: 0.5*h_\mu^2 + h_\mu * \theta_\mu
+        # The different sign of the \theta term is due to the fact that I use a convention
+        # different from Monasson, i.e. \theta = - \theta_{Monasson}
+        # TO BE CHANGED?
+        en_t = 0.5*np.dot( h, h )  - np.dot( h, self.W[0] ) 
+        
+        return -en_W - en_g + en_t 
+    
+    def __freeEnergy( self, v ):
+        en_g = np.dot( v, self.W[:,0] )
+        net = np.dot( self.W.T[1:,1:], v[1:] )
+        en_eff = 0.5*np.linalg.norm( net - self.W[0,1:] )**2 + np.log( np.sqrt( np.pi/2 ) ) \
+                 + np.sum( np.log( 0.5 - special.erf( 1.0/np.sqrt(2)*( net-self.W[0,1:] ) ) ) ) 
+        return -en_g - en_eff
+        
     def __phi( self, x ):
 
         # Add gaussian noise with null mean  and unit variance

@@ -2,12 +2,20 @@
 Script to make the machine run
 
 To-do list:
-    - Compare dataset per l > 1, modificando le probabilità rispetto a p_01 e p_10 di Hinton da 40-20
-    - Spostare i grafici fit() fuori, se possibile
-    - Cambiare i segni di g_i e \theta_{\mu} (solo nella rappresentazione?)
-
+    - Implementare una funzione pStar_Visible() che restituisce la probabilità marginalizzata non normalizzata,
+    secondo la formula (4) di Monasson pag. 5 SI
     - Controllo dell'apprendimento attraverso la log-likelihood log P (v) anziché tramite energia libera. Utilizzo
     dell'algoritmo Annealed Importance Sampling per approssimare la funzione di partizione Z
+
+
+
+
+
+    - Spostare i grafici fit() fuori, se possibile
+    - Cambiare i segni di g_i e \theta_{\mu} (solo nella rappresentazione?); si potrebbe introdurre una reference W_t e una W
+      della matrice estesa o non
+    - Cercare CHANGE?
+
     - Implementare e confronto Persistent Contrastive Divergence
 
 
@@ -23,6 +31,7 @@ To-do list:
     - Calcolare l'attivazione media delle hidden unit al variare delle epoche
     - Togliere i commenti inutili 
     - Introduzione target sparsity ?
+    - Come si calcola la pseudolikelihood?
     - Introduzione Hamming distance ?
 
 """
