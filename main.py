@@ -2,13 +2,8 @@
 Script to make the machine run
 
 To-do list:
-    - Implementare una funzione pStar_Visible() che restituisce la probabilità marginalizzata non normalizzata,
-    secondo la formula (4) di Monasson pag. 5 SI
     - Controllo dell'apprendimento attraverso la log-likelihood log P (v) anziché tramite energia libera. Utilizzo
     dell'algoritmo Annealed Importance Sampling per approssimare la funzione di partizione Z
-
-
-
 
 
     - Spostare i grafici fit() fuori, se possibile
@@ -85,7 +80,7 @@ c_a = 1.0 + 1.0/10
 ratioTrain = 0.5
 # Seed for the dataset and the machine
 seedTr = 0
-seedBM = None
+seedBM = 0
 # Number of repetitions
 if seedTr != None and seedBM != None:
     n = 1
@@ -331,8 +326,11 @@ for k in range( n ):
         axarr[1].set_ylabel("$\hat{S}$")
         plt.show()
     
-    np.set_printoptions( threshold = 10, precision = 2) 
+    np.set_printoptions( precision = 2) 
     print( BM.W )
+    print( "Thresholds:", BM.W[0] )
+    print( np.mean( BM.W[0] ) )
+    print( "Max element:", np.max( np.abs( BM.W.flatten() ) ) ) 
     input()
 ######## File outputs    
 with open('results.csv', 'a') as csvfile:            

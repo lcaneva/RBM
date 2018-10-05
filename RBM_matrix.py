@@ -358,6 +358,7 @@ class BaseRBM:
             energies = -np.dot( X, self.W[:,0]) - np.sum( np.log(1+np.exp(net)), axis = 1  )
             return np.sum( energies )        
 
+
     """
     Compute average free energies.
     ------------------------------
@@ -372,14 +373,25 @@ class BaseRBM:
     def monitorOverfitting( self, X_train, X_test):
             
         # DEBUG
-        set_trace()
+        #set_trace()
         if not( isinstance( self, ReLU_RBM ) ):            
             avg_train = self.__freeEnergy( X_train )/len(X_train)
             avg_test =  self.__freeEnergy( X_train )/len(X_test)
         else:
-            pass
-            #avg_train = self._ReLU_RBM__freeEnergy( X_train )/len(X_train)
-            #avg_test =  self.__freeEnergy( X_train )/len(X_test)
+            logl = 0
+            for x in X_train:
+                logl +=   -self._ReLU_RBM__freeEnergy( x )  - np.log(self.AIS( K=100, n_tot = 5 ) ) 
+            avg_train = logl/len(X_train)
+
+            #en_train = 0
+            #en_test  = 0
+            #for i in range( len(X_train) ):
+                #tmp =  self._ReLU_RBM__freeEnergy( X_train[i] )
+                #en_train += tmp
+            #for i in range( len(X_test) ):
+                #en_test += self._ReLU_RBM__freeEnergy( X_test[i] )
+
+            #avg_test =  self._ReLU_RBM__freeEnergy( X_test[0] )/len(X_test)
         
         return avg_train, avg_test
 
@@ -494,6 +506,7 @@ class BaseRBM:
 # with rectified linear hidden units
 ##################################################
 class ReLU_RBM( BaseRBM ):
+    # TO BE CHANGED?
     def __energy( self, v, h ):
         # Compute the energy of the current state of the machine
         en_W = np.dot( np.dot( self.W[1:,1:], h[1:] ), v[1:] )
@@ -504,18 +517,115 @@ class ReLU_RBM( BaseRBM ):
         # different from Monasson, i.e. \theta = - \theta_{Monasson}
         # TO BE CHANGED?
         en_t = 0.5*np.dot( h, h )  - np.dot( h, self.W[0] ) 
-        
         return -en_W - en_g + en_t 
     
-    def __freeEnergy( self, v ):
-        en_g = np.dot( v, self.W[:,0] )
-        net = np.dot( self.W.T[1:,1:], v[1:] )
-        en_eff = 0.5*np.linalg.norm( net - self.W[0,1:] )**2 + np.log( np.sqrt( np.pi/2 ) ) \
-                 + np.sum( np.log( 0.5 - special.erf( 1.0/np.sqrt(2)*( net-self.W[0,1:] ) ) ) ) 
+    def __freeEnergy( self, v, beta = 1, W_ext = np.empty(0) ):
+        if W_ext.size > 0:
+            W = W_ext
+        else:
+            W = self.W
+ 
+        en_g = beta * np.dot( v, W[:,0] )
+        net = np.dot( W.T[1:,1:], v[1:] )
+        # The different sign of the \theta term is due to the fact that I use a convention
+        # different from Monasson, i.e. \theta = - \theta_{Monasson}
+        # TO BE CHANGED?
+        en_eff = 0.5*beta*np.linalg.norm( net + W[0,1:] )**2 + np.log( np.sqrt( np.pi/(2*beta) ) )*self.M 
+        for mu in range( self.M ):
+            tmp = net[mu]+W[0,mu+1]
+            with np.errstate(divide='raise'):
+                try:
+                    en_eff += np.log( 1. + np.sign(tmp)*special.erf( np.sqrt(beta/2)*np.abs( tmp ) ) )
+                except FloatingPointError:
+                    print(tmp,  np.sign(tmp)*special.erf( np.sqrt(beta/2)*np.abs( tmp ) ) )
+                    input()
         return -en_g - en_eff
+
+    """
+    Annealed Importance Sampling algorithm.
+    -----------------------------------------
+    Input arguments: 
+        n_tot, total number of runs (that is M in the notation of Salakhutdinov)
+        K, total number of samplings
+        
+    Get an approximation of the partition function of an RBM, using the AIS algorithm 
+    defined in Salakhutdinov's article. In particular, it is considered a reference
+    RBM, denoted as A, with null weight matrix and null ReLU-thresholds as the starting point
+    of the annealing.
+    """
+    def AIS( self, K, n_tot ):
+        # Define importance weights
+        w = np.zeros( n_tot )
+        # Compute Z for the reference RBM
+        # TO BE CHANGED?
+        #Z_A = 2**self.M * np.prod( 1 + np.exp( self.W[1:,0] ) )
+        Z_A = np.sqrt(np.pi/2)**self.M * np.prod( 1 + np.exp( self.W[1:,0] ) )
+
+        # Define the weight matrix for the reference RBM 
+        W_A = np.zeros( (self.N+1, self.M), dtype = float )
+        W_A = np.insert( W_A, 0, self.W[:,0], axis = 1 ) 
+        
+        # Define the marginalized distribution for the reference RBM
+        p_A = 1.0/( 1 + np.exp(-self.W[1:,0]) )
+        
+        # Repeat n_tot times the annealing
+        for i in range( n_tot ):
+            # Generate the v's sequence
+            for k in range( K ):
+                # Define the inverse temperatures for the transition operator 
+                # and the computation of w_i
+                beta_curr = k*1.0/K
+                beta_next = (k+1)*1.0/K
+
+                if k == 0:
+                    # Define the visible vector that spans the sequence v_1, ..., v_K
+                    v_curr = np.zeros( self.N, dtype= float )
+                    # Add a dimension for the biases
+                    v_curr = np.insert( v_curr, 0, 1, axis = 0)
+        
+                    # Sample v_1 through the marginalized of the reference RBM
+                    y = np.random.rand( self.N ) 
+                    v_curr[1:] = (y <= p_A)
+                    
+                    # Compute the starting contribution to w: p^*_1(v_1)/p^*_0(v_1)
+                    w[i] = np.exp( -self.__freeEnergy( v_curr, 1.0-beta_next, W_A )-self.__freeEnergy( v_curr, beta_next ) )  
+                    w[i] /= np.exp( -self.__freeEnergy( v_curr, 1.0-beta_curr, W_A ) )
+            
+                else:                        
+                    # Compute h_A
+                    self.updateHidden( (1-beta_curr) * v_curr, W_ext = W_A )
+                    h_A = np.copy( self.h )
+                    
+                    # Compute h_B
+                    self.updateHidden( beta_curr * v_curr )
+                    h_B = np.copy( self.h )
+                    
+                    # Update v_curr through h_A, h_B 
+                    net = (1-beta_curr) * np.dot( W_A, h_A ) + beta_curr * np.dot( self.W, h_B )            
+                    vp = 1.0/(1 + np.exp( -net ) )
+                    y = np.random.rand( self.N )
+                    v_curr[1:] = (y <= vp[1:])                     
+                
+                    # Update the i-th importance weight
+                    # Check if beta_next == 1.0
+                    if k < K-1:
+                        w[i] *=  np.exp( -self.__freeEnergy( v_curr, 1.0-beta_next, W_A )-self.__freeEnergy( v_curr, beta_next ) )
+                    else:
+                        w[i] *=  np.exp( -self.__freeEnergy( v_curr, beta_next ) )
+                                        
+                    #with np.errstate(divide='raise'):
+                        #try:  
+                            #w[i] /=  np.exp( -self.__freeEnergy( v_curr, 1.0-beta_curr, W_A )-self.__freeEnergy( v_curr, beta_curr ) )
+                        #except:
+                            #set_trace()
+
+                
+        Z_approx = np.sum( w )/n_tot * Z_A
+        return Z_approx
+        
+
         
     def __phi( self, x ):
-
         # Add gaussian noise with null mean  and unit variance
         # to all preactivations of the hidden units 
         # given in input
@@ -523,12 +633,6 @@ class ReLU_RBM( BaseRBM ):
             x = x + np.random.randn( self.M + 1 )
         else:
             x = x + np.random.randn( x.shape[0], self.M+1 )
-
-        #if x.ndim == 1:
-            #x = x + np.random.randn( self.M + 1 )
-        #else:
-            #for i in range(len(x)):
-                #x[i] +=  np.random.randn( self.M+1 )
 
         # Determine which hidden units are not active
         x[x<0] = 0
@@ -540,18 +644,24 @@ class ReLU_RBM( BaseRBM ):
     ---------------------------------------------------
     Input arguments:
         x, input visible state
+        W_ext, input weights (useful for AIS) 
         
     Update the hidden state of the machine. 
     """
-    def updateHidden( self, x ):
+    def updateHidden( self, x, W_ext = np.empty( 0 ) ):
+        if W_ext.size > 0:
+            W = W_ext
+        else:
+            W = self.W
+            
         if x.ndim == 1:
-            net = np.dot( self.W.T, x )
+            net = np.dot( W.T, x )
             self.h = self.__phi( net )
             
             # Definition of bias unit that is always active
             self.h[0] = 1
         else:
-            net = np.dot( x, self.W )
+            net = np.dot( x, W )
             self.h = self.__phi( net )
             # Definition of bias unit that is always active
             self.h[:,0] = 1
@@ -561,10 +671,7 @@ class ReLU_RBM( BaseRBM ):
     --------------------------------------------
     
     """
-    def CD( self, v_example, SGS ):
-        # DEBUG
-        #set_trace()
-        
+    def CD( self, v_example, SGS ):        
         
         # Positive phase 
         # Get the new hidden state
