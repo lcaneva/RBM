@@ -2,7 +2,10 @@
 Script to make the machine run
 
 To-do list:
-    - Controllo dell'apprendimento attraverso la log-likelihood log P (v) anziché tramite energia libera. Utilizzo
+    - Capire perché le threshold "esplodono"
+    - Capire perché per N=40, M=20, L=2 la log-likelihood media diventa positiva
+    
+    - Controllo dell'apprendimento attraverso la log-likelihood log P (v) anziché tramite l'energia libera. Utilizzo
     dell'algoritmo Annealed Importance Sampling per approssimare la funzione di partizione Z
 
 
@@ -12,7 +15,7 @@ To-do list:
     - Cercare CHANGE?
 
     - Implementare e confronto Persistent Contrastive Divergence
-
+    - Rimettere epsilon variabile
 
     - Controllare se la sparsità controlla \tilde{m}. Ripetere dopo aver cambiato dataset
     - Cercare dei valori buoni per epsilon nel caso 40-20
@@ -50,7 +53,7 @@ useReLU = True
 N = 40
 M = 20
 # Length of the categories
-l = 1
+l = 2
 # Probabilities for noisy clamping
 if N <= 5:
     p_01 = 0.15
@@ -65,7 +68,7 @@ else:
 
 
 # Learning algorithm
-LA = "CD"
+LA = "PCD"
 # Steps Gibbs Sampling 
 SGS = 1
 # Sampling period during the learning
@@ -73,14 +76,14 @@ period = 50
 # Momentum coefficient
 alpha = 0
 # Epsilon decaying coefficient
-c_e = 2.0/3
+c_e = 1.0
 # Alpha growth coefficient
 c_a = 1.0 + 1.0/10
 # Percentage of the dataset that will form the training set
 ratioTrain = 0.5
 # Seed for the dataset and the machine
 seedTr = 0
-seedBM = 0
+seedBM = None
 # Number of repetitions
 if seedTr != None and seedBM != None:
     n = 1
@@ -165,6 +168,10 @@ dataset = buildDataset( N, l, seedTr, p_01, p_10 )
 # Use hold-out technique to avoid overfitting
 X_train, X_test = train_test_split( dataset, test_size=(1-ratioTrain), random_state = seedTr)
 
+print( dataset )
+np.save("debug", dataset)
+input()
+
 if plots:
     plt.matshow( X_train[:,1:] ) 
     plt.show() 
@@ -196,6 +203,7 @@ for k in range( n ):
         
     ############### Analyze the perfomance of the RBM
     def analyzePerfomance( X ):
+        
         size = len(X)
         L_arr = np.zeros( size )
         S_arr = np.zeros( size )
@@ -220,7 +228,8 @@ for k in range( n ):
         for i in indices:
             
             # Obtain the reconstruction given by the machine
-            BM.GibbsSampling( v_init = X_red[i], SGS = 1 )
+            BM.v, BM.h = BM.GibbsSampling( v_init = X_red[i], SGS = 1 )
+            
 
             # Compute its distance from the real visible state
             dist = np.linalg.norm( X_red[i] - BM.v )**2
@@ -237,6 +246,7 @@ for k in range( n ):
             m_t[k], magnet[k] = BM.analyzeMagnetizations( X_red[i], L_arr[k] )
             
             ## DEBUG
+            #print( X_red[i], "\t", BM.v )
             #print( "Visible example", X_red[i, 1:] ) 
             #print( "Hidden repr = ", BM.h[1:] )
             #print( "Hidden biases =", BM.W.T[1:,0]  )
@@ -261,6 +271,8 @@ for k in range( n ):
         print( "L_avg = ", np.mean( L_arr ) )
         print( "m^~ = ", np.mean( m_t ) )
         print( "m_avg = ",  np.mean( magnet.flatten() )  )
+        
+        input()
         
         return MRE, nCorrect, L_arr, S_arr, corr, wrong, m_t, magnet
     
@@ -326,11 +338,10 @@ for k in range( n ):
         axarr[1].set_ylabel("$\hat{S}$")
         plt.show()
     
-    np.set_printoptions( precision = 2) 
+    np.set_printoptions( precision = 2, suppress= True, linewidth = 1000) 
     print( BM.W )
     print( "Thresholds:", BM.W[0] )
-    print( np.mean( BM.W[0] ) )
-    print( "Max element:", np.max( np.abs( BM.W.flatten() ) ) ) 
+    print( "Max element of BM.W:", np.max( np.abs( BM.W.flatten() ) ) ) 
     input()
 ######## File outputs    
 with open('results.csv', 'a') as csvfile:            
