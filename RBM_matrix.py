@@ -113,7 +113,7 @@ class BaseRBM:
                 v_rec = self.v
             elif LA == 'PCD':
                 W_updates = epsilon/sizeMB * self.PCD( X_train, SGS, num_chains = sizeMB  )
-                v_rec = self.v_chains
+                v_rec, __ = self.GibbsSampling( v_init = X_train )
                 
             # Compute the regularization contribution
             W_updates -=  epsilon/sizeMB * lambda_x * self.regularize( x=2 )  
@@ -164,6 +164,8 @@ class BaseRBM:
             if plots:
                 if t % period_ovf == 0:
                     ovf_train[counter], ovf_test[counter],label = self.monitorOverfitting( X_train, X_test )
+                    if ovf_train[counter] > 0 or ovf_test[counter] > 0:
+                        print("Positive log-likelihood!")
                     p_arr[counter], aux, T = self.analyzeWeights() 
                     counter += 1
 
@@ -598,16 +600,21 @@ class ReLU_RBM( BaseRBM ):
         # TO BE CHANGED?
         en_eff = 0.5*beta*np.linalg.norm( net + W[0,1:] )**2
         arg_log = 1.0
+        # DEBUG
         with np.errstate(divide='raise'):
             try:
                 for mu in range( self.M ):
                     tmp = net[mu]+W[0,mu+1]
-                    if tmp < 0:continue
-                    arg_log *=  np.sqrt( np.pi/(2*beta) )*( 1. + np.sign(tmp)*special.erf( np.sqrt(beta/2)*np.abs( tmp ) ) )
+                    if tmp > 0:
+                        arg_log *=  np.sqrt( np.pi/(2*beta) )*( 1. + np.sign(tmp)*special.erf( np.sqrt(beta/2)*np.abs( tmp ) ) )
+                    else:
+                        arg_log *= np.sqrt( np.pi/(2*beta) )*special.erfc( np.sqrt( beta/2 )*-tmp ) 
                 en_eff += np.log( arg_log )
             except FloatingPointError:
                 print( "FloatingPointError occured" )
-                print(tmp,  np.sign(tmp)*special.erf( np.sqrt(beta/2)*np.abs( tmp ) ) )
+                print( net + W[0,1:], arg_log, beta )
+                print( special.erf( np.sqrt(beta/2)*np.abs( tmp ) ) )
+                print(1. + np.sign(tmp)*special.erf( np.sqrt(beta/2)*np.abs( tmp ) ))
                 input()
         return -en_g - en_eff
 
@@ -649,7 +656,7 @@ class ReLU_RBM( BaseRBM ):
 
                 if k == 0:
                     # Define the visible vector that spans the sequence v_1, ..., v_K
-                    v_curr = np.zeros( self.N, dtype= float )
+                    v_curr =  np.zeros( self.N, dtype= float )
                     # Add a dimension for the biases
                     v_curr = np.insert( v_curr, 0, 1, axis = 0)
         
@@ -658,8 +665,7 @@ class ReLU_RBM( BaseRBM ):
                     v_curr[1:] = (y <= p_A)
                     
                     # Compute the starting contribution to w: p^*_1(v_1)/p^*_0(v_1)
-                    w[i] = np.exp( -self.__freeEnergy( v_curr, 1.0-beta_next, W_A )-self.__freeEnergy( v_curr, beta_next ) )  
-                    w[i] /= np.exp( -self.__freeEnergy( v_curr, 1.0-beta_curr, W_A ) )
+                    w[i] = np.exp( -self.__freeEnergy( v_curr, 1.0-beta_next, W_A )-self.__freeEnergy( v_curr, beta_next )+ self.__freeEnergy( v_curr, 1.0-beta_curr, W_A ) )
             
                 else:                        
                     # Compute h_A
@@ -698,11 +704,37 @@ class ReLU_RBM( BaseRBM ):
     def monitorOverfitting( self, X_train, X_test):            
         label = 'Average log-likelihood'        
         logl = 0
+        # DEBUG
+        Z_A = np.sqrt(np.pi/2)**self.M * np.prod( 1 + np.exp( self.W[1:,0] ) )
+        
+        n_runs = 10 
+        Z_c = np.zeros( n_runs )
+        for j in range(n_runs):
+            Z_c[j] = self.AIS( K=10, n_tot = 1 )/Z_A
+        print( "r_AIS = {} +/- {}".format( np.mean( Z_c ), np.std( Z_c ) ) )
+
+        Z_c = np.zeros( n_runs )
+        for j in range( n_runs ):
+            Z_c[j] = self.AIS( K=100, n_tot = 1 )/Z_A
+        print( "r_AIS = {} +/- {}".format( np.mean( Z_c ), np.std( Z_c ) ) )
+
+        Z_c = np.zeros( n_runs )
+        for j in range( n_runs ):
+            Z_c[j] = self.AIS( K=500, n_tot = 1 )/Z_A
+        print( "r_AIS = {} +/- {}".format( np.mean( Z_c ), np.std( Z_c ) ) )
+
+        Z_c = np.zeros( n_runs )
+        for j in range( n_runs ):
+            Z_c[j] = self.AIS( K=10000, n_tot = 1 )/Z_A
+        print( "r_AIS = {} +/- {}".format( np.mean( Z_c ), np.std( Z_c ) ) )
+
+        input()
+        
         Z_approx = self.AIS( K=50, n_tot = 5 )
         for x in X_train:
             logl +=   -self.__freeEnergy( x )  - np.log(Z_approx) 
         avg_train = logl/len(X_train)
-
+        
         logl = 0
         for x in X_test:
             logl +=   -self.__freeEnergy( x )  - np.log(Z_approx) 

@@ -2,12 +2,11 @@
 Script to make the machine run
 
 To-do list:
+    - Velocizzare ulteriormente gli update usando Theano?
+    - Eliminare AIS BaseRBM
+    
     - Capire perché le threshold "esplodono"
     - Capire perché per N=40, M=20, L=2 la log-likelihood media diventa positiva
-    
-    - Controllo dell'apprendimento attraverso la log-likelihood log P (v) anziché tramite l'energia libera. Utilizzo
-    dell'algoritmo Annealed Importance Sampling per approssimare la funzione di partizione Z
-
 
     - Spostare i grafici fit() fuori, se possibile
     - Cambiare i segni di g_i e \theta_{\mu} (solo nella rappresentazione?); si potrebbe introdurre una reference W_t e una W
@@ -68,7 +67,7 @@ else:
 
 
 # Learning algorithm
-LA = "PCD"
+LA = "CD"
 # Steps Gibbs Sampling 
 SGS = 1
 # Sampling period during the learning
@@ -83,7 +82,7 @@ c_a = 1.0 + 1.0/10
 ratioTrain = 0.5
 # Seed for the dataset and the machine
 seedTr = 0
-seedBM = None
+seedBM = 10
 # Number of repetitions
 if seedTr != None and seedBM != None:
     n = 1
