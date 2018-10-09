@@ -588,20 +588,6 @@ class ReLU_RBM( BaseRBM ):
         
         return v_samples, h_samples
     
-    
-    # TO BE CHANGED?
-    def __energy( self, v, h ):
-        # Compute the energy of the current state of the machine
-        en_W = np.dot( np.dot( self.W[1:,1:], h[1:] ), v[1:] )
-        # Bernoulli potential (binary visible units): v_i * g_i 
-        en_g = np.dot( v, self.W[:,0] )
-        # ReLU potential: 0.5*h_\mu^2 + h_\mu * \theta_\mu
-        # The different sign of the \theta term is due to the fact that I use a convention
-        # different from Monasson, i.e. \theta = - \theta_{Monasson}
-        # TO BE CHANGED?
-        en_t = 0.5*np.dot( h, h )  - np.dot( h, self.W[0] ) 
-        return -en_W - en_g + en_t 
-    
     def __freeEnergy( self, v, beta = 1, W_ext = np.empty(0) ):
         if W_ext.size > 0:
             W = W_ext
@@ -636,153 +622,6 @@ class ReLU_RBM( BaseRBM ):
                 input()
         return -en_g - en_eff
 
-    """
-    Annealed Importance Sampling algorithm.
-    -----------------------------------------
-    Input arguments: 
-        n_tot, total number of runs (that is M in the notation of Salakhutdinov)
-        K, total number of samplings
-        
-    Get an approximation of the partition function of an RBM, using the AIS algorithm 
-    defined in Salakhutdinov's article. In particular, it is considered a reference
-    RBM, denoted as A, with null weight matrix and null ReLU-thresholds as the starting point
-    of the annealing.
-    """
-    def AIS( self, K, n_tot ):
-        # Define importance weights
-        w = np.zeros( n_tot )
-        
-        # Define the weight matrix for the reference RBM 
-        W_A = np.zeros( (self.N+1, self.M+1), dtype = float )
-        W_A[:,0] = self.W[:,0] 
-        #W_A[0,:] = self.W[0,:] 
-        
-        
-        # Compute Z for the reference RBM
-        # TO BE CHANGED?
-        #Z_A = 2**self.M * np.prod( 1 + np.exp( self.W[1:,0] ) )
-        Z_A = np.sqrt(np.pi/2)**self.M * np.prod( 1 + np.exp( self.W[1:,0] ) )
-        #term_hidden = 1.0
-        #for mu in range( self.M ):
-            #theta = W_A[0, mu+1]
-            #term_hidden *= np.exp( -theta**2/2.0 )*np.sqrt( np.pi/2.0 )
-            #if theta > 0:
-                #term_hidden *= 1 + special.erf( theta/np.sqrt(2) )
-            #elif theta < 0:
-                #term_hidden *= special.erfc( -theta/np.sqrt(2) )
-        #Z_A = np.prod( 1.0 + np.exp( self.W[1:,0] ) )*term_hidden
-        
-        
-
-        # Define the marginalized distribution for the reference RBM
-        p_A = 1.0/( 1 + np.exp(-self.W[1:,0]) )
-        
-        # Repeat n_tot times the annealing
-        for i in range( n_tot ):
-            # Generate the v's sequence
-            for k in range( K ):
-                # Define the inverse temperatures for the transition operator 
-                # and the computation of w_i
-                beta_curr = k*1.0/K
-                beta_next = (k+1)*1.0/K
-
-                if k == 0:
-                    # Define the visible vector that spans the sequence v_1, ..., v_K
-                    v_curr =  np.zeros( self.N, dtype= float )
-                    # Add a dimension for the biases
-                    v_curr = np.insert( v_curr, 0, 1, axis = 0)
-        
-                    # Sample v_1 through the marginalized of the reference RBM
-                    y = np.random.rand( self.N ) 
-                    v_curr[1:] = (y <= p_A)
-                    
-                    # Compute the starting contribution to w: p^*_1(v_1)/p^*_0(v_1)
-                    w[i] = np.exp( -self.__freeEnergy( v_curr, 1.0-beta_next, W_A )-self.__freeEnergy( v_curr, beta_next )+ self.__freeEnergy( v_curr, 1.0-beta_curr, W_A ) )
-            
-                else:                        
-                    # Compute h_A
-                    h_A = self.updateHidden( (1-beta_curr) * v_curr, W_ext = W_A )
-                    
-                    # Compute h_B
-                    h_B = self.updateHidden( beta_curr * v_curr )
-                    
-                    # Update v_curr through h_A, h_B 
-                    net = (1-beta_curr) * np.dot( W_A, h_A ) + beta_curr * np.dot( self.W, h_B )            
-                    vp = 1.0/(1 + np.exp( -net ) )
-                    y = np.random.rand( self.N )
-                    v_curr[1:] = (y <= vp[1:])                     
-                
-                    # Update the i-th importance weight
-                    # Check if beta_next == 1.0
-                    if k < K-1:
-                        w[i] *=  np.exp( -self.__freeEnergy( v_curr, 1.0-beta_next, W_A )-self.__freeEnergy( v_curr, beta_next ) + self.__freeEnergy( v_curr, 1.0-beta_curr, W_A ) + self.__freeEnergy( v_curr, beta_curr ) )
-                    else:
-                        w[i] *=  np.exp( -self.__freeEnergy( v_curr, beta_next ) +self.__freeEnergy( v_curr, 1.0-beta_curr, W_A ) + self.__freeEnergy( v_curr, beta_curr ) )
- 
-                
-        Z_approx = np.sum( w )/n_tot * Z_A
-        return Z_approx
-        
-        
-    """
-    Compute average log-likelihood.
-    ------------------------------
-    Input arguments:
-        X_train, training set (at least a subset)
-        X_test,  test set
-
-    As explained in Monasson's article and in Hinton's guide, use the comparison of the average log-likelihood of the two sets of visibile instances  to monitor the overfitting.
-    """
-    def monitorOverfitting( self, X_train, X_test):            
-        
-        # DEBUG        
-        #n_runs = 10 
-        #Z_c = np.zeros( n_runs )
-        #for j in range(n_runs):
-            #Z_c[j] = self.AIS( K=10, n_tot = 1 )/Z_A
-        #print( "r_AIS = {} +/- {}".format( np.mean( Z_c ), np.std( Z_c ) ) )
-
-        #Z_c = np.zeros( n_runs )
-        #for j in range( n_runs ):
-            #Z_c[j] = self.AIS( K=100, n_tot = 1 )/Z_A
-        #print( "r_AIS = {} +/- {}".format( np.mean( Z_c ), np.std( Z_c ) ) )
-
-        #Z_c = np.zeros( n_runs )
-        #for j in range( n_runs ):
-            #Z_c[j] = self.AIS( K=500, n_tot = 1 )/Z_A
-        #print( "r_AIS = {} +/- {}".format( np.mean( Z_c ), np.std( Z_c ) ) )
-
-        #Z_c = np.zeros( n_runs )
-        #for j in range( n_runs ):
-            #Z_c[j] = self.AIS( K=10000, n_tot = 1 )/Z_A
-        #print( "r_AIS = {} +/- {}".format( np.mean( Z_c ), np.std( Z_c ) ) )
-
-        #input()
-        label = 'Average log-likelihood'        
-        log_pstar = 0
-        Z_A = np.sqrt(np.pi/2)**self.M * np.prod( 1 + np.exp( self.W[1:,0] ) )
-
-        Z_approx = self.AIS( K=100, n_tot = 5 )
-        for x in X_train:
-            # DEBUG
-            log_pstar -=  self.__freeEnergy( x )  
-        avg_train = log_pstar/len(X_train)  - np.log(Z_approx)
-        
-        log_pstar = 0
-        for x in X_test:
-            log_pstar -=  self.__freeEnergy( x )  
-        avg_test = log_pstar/len(X_test)  - np.log(Z_approx)
-        
-        
-        # DEBUG
-        avg_train_2 = 0
-        for x in X_train:
-            avg_train_2 += -self.__freeEnergy( x )/len(X_train)
-        avg_test_2 = 0
-        for x in X_test:
-            avg_test_2 += -self.__freeEnergy( x )/len(X_test)
-
-        return avg_train, avg_test, label, avg_train_2, avg_test_2
 
         
     def __phi( self, x ):
@@ -909,3 +748,150 @@ class ReLU_RBM( BaseRBM ):
         return  delta_pos - delta_neg 
     
         
+
+
+
+    """
+    Annealed Importance Sampling algorithm.
+    -----------------------------------------
+    Input arguments: 
+        n_tot, total number of runs (that is M in the notation of Salakhutdinov)
+        K, total number of samplings
+        
+    Get an approximation of the partition function of an RBM, using the AIS algorithm 
+    defined in Salakhutdinov's article. In particular, it is considered a reference
+    RBM, denoted as A, with null weight matrix and null ReLU-thresholds as the starting point
+    of the annealing.
+    """
+    def AIS( self, K, n_tot ):
+        # Define importance weights
+        w = np.zeros( n_tot )
+        
+        # Define the weight matrix for the reference RBM 
+        W_A = np.zeros( (self.N+1, self.M+1), dtype = float )
+        W_A[:,0] = self.W[:,0] 
+        #W_A[0,:] = self.W[0,:] 
+        
+        
+        # Compute Z for the reference RBM
+        # TO BE CHANGED?
+        #Z_A = 2**self.M * np.prod( 1 + np.exp( self.W[1:,0] ) )
+        Z_A = np.sqrt(np.pi/2)**self.M * np.prod( 1 + np.exp( self.W[1:,0] ) )
+        #term_hidden = 1.0
+        #for mu in range( self.M ):
+            #theta = W_A[0, mu+1]
+            #term_hidden *= np.exp( -theta**2/2.0 )*np.sqrt( np.pi/2.0 )
+            #if theta > 0:
+                #term_hidden *= 1 + special.erf( theta/np.sqrt(2) )
+            #elif theta < 0:
+                #term_hidden *= special.erfc( -theta/np.sqrt(2) )
+        #Z_A = np.prod( 1.0 + np.exp( self.W[1:,0] ) )*term_hidden
+        
+        
+
+        # Define the marginalized distribution for the reference RBM
+        p_A = 1.0/( 1 + np.exp(-self.W[1:,0]) )
+        
+        # Repeat n_tot times the annealing
+        for i in range( n_tot ):
+            # Generate the v's sequence
+            for k in range( K ):
+                # Define the inverse temperatures for the transition operator 
+                # and the computation of w_i
+                beta_curr = k*1.0/K
+                beta_next = (k+1)*1.0/K
+
+                if k == 0:
+                    # Define the visible vector that spans the sequence v_1, ..., v_K
+                    v_curr =  np.zeros( self.N, dtype= float )
+                    # Add a dimension for the biases
+                    v_curr = np.insert( v_curr, 0, 1, axis = 0)
+        
+                    # Sample v_1 through the marginalized of the reference RBM
+                    y = np.random.rand( self.N ) 
+                    v_curr[1:] = (y <= p_A)
+                    
+                    # Compute the starting contribution to w: p^*_1(v_1)/p^*_0(v_1)
+                    w[i] = np.exp( -self.__freeEnergy( v_curr, 1.0-beta_next, W_A )-self.__freeEnergy( v_curr, beta_next )+ self.__freeEnergy( v_curr, 1.0-beta_curr, W_A ) )
+            
+                else:                        
+                    # Compute h_A
+                    h_A = self.updateHidden( (1-beta_curr) * v_curr, W_ext = W_A )
+                    
+                    # Compute h_B
+                    h_B = self.updateHidden( beta_curr * v_curr )
+                    
+                    # Update v_curr through h_A, h_B 
+                    net = (1-beta_curr) * np.dot( W_A, h_A ) + beta_curr * np.dot( self.W, h_B )            
+                    vp = 1.0/(1 + np.exp( -net ) )
+                    y = np.random.rand( self.N )
+                    v_curr[1:] = (y <= vp[1:])                     
+                
+                    # Update the i-th importance weight
+                    # Check if beta_next == 1.0
+                    if k < K-1:
+                        w[i] *=  np.exp( -self.__freeEnergy( v_curr, 1.0-beta_next, W_A )-self.__freeEnergy( v_curr, beta_next ) + self.__freeEnergy( v_curr, 1.0-beta_curr, W_A ) + self.__freeEnergy( v_curr, beta_curr ) )
+                    else:
+                        w[i] *=  np.exp( -self.__freeEnergy( v_curr, beta_next ) +self.__freeEnergy( v_curr, 1.0-beta_curr, W_A ) + self.__freeEnergy( v_curr, beta_curr ) )
+ 
+                
+        Z_approx = np.sum( w )/n_tot * Z_A
+        return Z_approx
+        
+        
+    """
+    Compute average log-likelihood.
+    ------------------------------
+    Input arguments:
+        X_train, training set (at least a subset)
+        X_test,  test set
+
+    As explained in Monasson's article and in Hinton's guide, use the comparison of the average log-likelihood of the two sets of visibile instances  to monitor the overfitting.
+    """
+    def monitorOverfitting( self, X_train, X_test):            
+        
+        # DEBUG        
+        #n_runs = 10 
+        #Z_c = np.zeros( n_runs )
+        #for j in range(n_runs):
+            #Z_c[j] = self.AIS( K=10, n_tot = 1 )/Z_A
+        #print( "r_AIS = {} +/- {}".format( np.mean( Z_c ), np.std( Z_c ) ) )
+
+        #Z_c = np.zeros( n_runs )
+        #for j in range( n_runs ):
+            #Z_c[j] = self.AIS( K=100, n_tot = 1 )/Z_A
+        #print( "r_AIS = {} +/- {}".format( np.mean( Z_c ), np.std( Z_c ) ) )
+
+        #Z_c = np.zeros( n_runs )
+        #for j in range( n_runs ):
+            #Z_c[j] = self.AIS( K=500, n_tot = 1 )/Z_A
+        #print( "r_AIS = {} +/- {}".format( np.mean( Z_c ), np.std( Z_c ) ) )
+
+        #Z_c = np.zeros( n_runs )
+        #for j in range( n_runs ):
+            #Z_c[j] = self.AIS( K=10000, n_tot = 1 )/Z_A
+        #print( "r_AIS = {} +/- {}".format( np.mean( Z_c ), np.std( Z_c ) ) )
+        #Z_A = np.sqrt(np.pi/2)**self.M * np.prod( 1 + np.exp( self.W[1:,0] ) )
+        #log_pstar = 0
+        #Z_approx = self.AIS( K=100, n_tot = 5 )
+        #for x in X_train:
+            ## DEBUG
+            #log_pstar -=  self.__freeEnergy( x )  
+        #avg_train = log_pstar/len(X_train)  - np.log(Z_approx)
+        
+        #log_pstar = 0
+        #for x in X_test:
+            #log_pstar -=  self.__freeEnergy( x )  
+        #avg_test = log_pstar/len(X_test)  - np.log(Z_approx)
+        
+        #input()
+        label = 'Average free-energies'        
+        # DEBUG
+        avg_train = 0
+        for x in X_train:
+            avg_train += -self.__freeEnergy( x )/len(X_train)
+        avg_test = 0
+        for x in X_test:
+            avg_test += -self.__freeEnergy( x )/len(X_test)
+
+        return avg_train, avg_test, label
