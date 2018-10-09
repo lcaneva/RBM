@@ -1,11 +1,11 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from pudb import set_trace
-
+from scipy import special
 
 ##################################################
 # Class for Restricted Boltzmann Machines
-# Use same interface of other ML methods in Scikit-learn
+# with binary logistic units
 ##################################################
 class BaseRBM:
     
@@ -38,9 +38,8 @@ class BaseRBM:
             self.h = np.empty( M+1, dtype = float )
             
             # Initialize probabilities vectors
-            if not( isinstance( self, ReLU_RBM ) ):
-                self.vp = np.empty( N+1, dtype = float )
-                self.hp = np.empty( M+1, dtype = float )
+            self.vp = np.empty( N+1, dtype = float )
+            self.hp = np.empty( M+1, dtype = float )
                         
             """
             Weight matrix.
@@ -68,7 +67,7 @@ class BaseRBM:
             # Biases initialization
             self.W[0,:] = 0
             self.W[:,0] = 0 
-                        
+            
             
     """
     Learning algorithm.
@@ -92,54 +91,87 @@ class BaseRBM:
     def fit( self, X_train, X_test, LA , SGS,  epsilon, alpha, lambda_x, nEpochs, c_e, c_a, period, plots  ):
         # Initialize counter for the energies and sampling period
         counter = 0
-        period_en = 10
+        period_ovf = 10
         # Size of the input mini-batch
         sizeMB = len( X_train )
 
         # Initialize arrays for the statistics
         MRE = np.zeros( nEpochs, dtype = float )
         nCorrect = np.zeros( nEpochs, dtype = float )
-        p_arr = np.zeros( int(nEpochs/period_en), dtype = float )        
-        energy_train = np.zeros( int(nEpochs/period_en), dtype = float )
-        energy_test = np.zeros( int(nEpochs/period_en), dtype = float )        
+        p_arr = np.zeros( int(nEpochs/period_ovf), dtype = float )        
+        ovf_train = np.zeros( int(nEpochs/period_ovf), dtype = float )
+        ovf_test = np.zeros( int(nEpochs/period_ovf), dtype = float )        
+        # DEBUG
+        ovf_train = np.zeros( int(nEpochs/period_ovf), dtype = float )
+        ovf_test = np.zeros( int(nEpochs/period_ovf), dtype = float )        
+        ovf_train_2 = np.zeros( int(nEpochs/period_ovf), dtype = float )
+        ovf_test_2 = np.zeros( int(nEpochs/period_ovf), dtype = float )        
+        
         velocity = np.zeros( (self.N+1, self.M+1) )        
         
         # Iterate through X_train nEpochs times
         for t in range( nEpochs ):
+            #if self.W[0,1] > 1e3:
+                #set_trace()
             # Compute the contribution to the weight updates deriving from the log-likelihood (heuristically) 
-            W_updates = epsilon/sizeMB * self.CD( X_train, SGS )
+            if LA == 'CD':
+                W_updates = epsilon/sizeMB * self.CD( X_train, SGS )
+                v_rec = self.v
+            elif LA == 'PCD':
+                W_updates = epsilon/sizeMB * self.PCD( X_train, SGS, num_chains = sizeMB  )
+                v_rec, __ = self.GibbsSampling( v_init = X_train )
+                
             # Compute the regularization contribution
             W_updates -=  epsilon/sizeMB * lambda_x * self.regularize( x=2 )  
             
             # Iterate through X_train
             for i in range( sizeMB ):
                 # Compute reconstruction error
-                sq_dist = np.linalg.norm(X_train[i] - self.v[i])**2 
+                sq_dist = np.linalg.norm(X_train[i] - v_rec[i])**2 
                 MRE[t] += sq_dist            
                 # Check if it is the correct reconstruction
                 if sq_dist == 0:
                     nCorrect[t] += 1
-                
+            
             # Update the velocity
             velocity =  W_updates + alpha*velocity
             
             # Update the weights (one time per epoch)
             self.W += velocity
             
+            # Update the Markov chains, if using PCD
+            if LA == 'PCD':
+                # DEBUG
+                #for i in range(len(self.v_chains)):
+                    #print( self.v_chains[i], self.h_chains[i] ) 
+                
+                # Update the chains
+                self.v_chains, self.h_chains = self.GibbsSampling( h_init = self.h_chains, SGS=1 )
+                
+                ##DEBUG
+                #for i in range(len(self.v_chains)):
+                    #print( self.v_chains[i], self.h_chains[i] ) 
+                #input()
+            
             # Update the coefficients
             if t % period == 0:
                 # Geometric decay of the learning rate
                 epsilon *= c_e 
-
+                
                 # Increase alpha towards the end of learning
                 if t > nEpochs*0.5: 
                     alpha *= c_a
                 
+                ## DEBUG
+                #print( t, self. h )
+                #print( self.W )
+                #input()
             # Compute the energies and the sparsity
             if plots:
-                if t % period_en == 0:
-                    if not( isinstance( self, ReLU_RBM ) ):
-                        energy_train[counter], energy_test[counter] = self.evaluateOverfitting( X_train, X_test )
+                if t % period_ovf == 0:
+                    ovf_train[counter], ovf_test[counter],label, ovf_train_2[counter], ovf_test_2[counter] = self.monitorOverfitting( X_train, X_test )
+                    if ovf_train[counter] > 0 or ovf_test[counter] > 0:
+                        print("Positive log-likelihood!")
                     p_arr[counter], aux, T = self.analyzeWeights() 
                     counter += 1
 
@@ -147,9 +179,21 @@ class BaseRBM:
             MRE[t] /= sizeMB
             nCorrect[t] = nCorrect[t]*100.0/sizeMB
             
-            print("---------------Epoch {}--------------".format(t+1))
-            print( "Mean Squared Error = ", MRE[t] )
-            print( "Correct reconstructions (%%) = %.2f \n" % nCorrect[t] ) 
+
+            if t % period == 0 or t == nEpochs-1:
+                print("---------------Epoch {}--------------".format(t))
+                print( "Mean Squared Error = ", MRE[t] )
+                print( "Correct reconstructions (%%) = %.2f \n" % nCorrect[t] ) 
+                
+                np.set_printoptions( linewidth = 1000, formatter={'all':lambda x: str(x) if x > 0 else '_'} )
+                for i in range( sizeMB ):
+                    print( X_train[i].astype(int) )
+                    print( v_rec[i].astype(int), "\t{:.2f}".format( np.linalg.norm(X_train[i] - v_rec[i])**2), "\n"  )
+                np.set_printoptions()
+
+            #print("---------------Epoch {}--------------".format(t+1))
+            #print( "Mean Squared Error = ", MRE[t] )
+            #print( "Correct reconstructions (%%) = %.2f \n" % nCorrect[t] ) 
         
 
         # Make plots for the current mini-batch, if required
@@ -163,19 +207,28 @@ class BaseRBM:
             axarr[1].set_xlabel('Epochs')
             # Monitor the sparsity
             plt.figure()
-            plt.plot([period_en*i for i in range( len( p_arr ) )], p_arr )
+            plt.plot([period_ovf*i for i in range( len( p_arr ) )], p_arr )
             plt.ylabel('Sparsity')
             plt.xlabel('Epochs')
             plt.show()            
             # Monitor the overfitting
-            if not( isinstance( self, ReLU_RBM ) ):
-                plt.figure()
-                plt.plot([period_en*i for i in range( len( energy_train ) )], energy_train, label="Training set" )
-                plt.plot([period_en*i for i in range( len( energy_test ) )], energy_test, label = "Test set")
-                plt.legend()
-                plt.ylabel('Average free energy')
-                plt.xlabel('Epochs')
-                plt.show()
+            plt.figure()
+            plt.plot([period_ovf*i for i in range( len( ovf_train ) )], ovf_train, label="Training set" )
+            plt.plot([period_ovf*i for i in range( len( ovf_test ) )], ovf_test, label = "Test set")
+            plt.plot([period_ovf*i for i in range( len( ovf_train ) )], np.zeros(len(ovf_train)) )
+            plt.legend()
+            plt.ylabel(label)
+            plt.xlabel('Epochs')
+
+            plt.figure()
+            plt.plot([period_ovf*i for i in range( len( ovf_train ) )], ovf_train_2, label="Training set" )
+            plt.plot([period_ovf*i for i in range( len( ovf_test ) )], ovf_test_2, label = "Test set")
+            plt.plot([period_ovf*i for i in range( len( ovf_train ) )], np.zeros(len(ovf_train)) )
+            plt.legend()
+            plt.ylabel(label)
+            plt.xlabel('Epochs')
+            plt.show()
+
 
     """
     Regularization function.
@@ -214,7 +267,7 @@ class BaseRBM:
         # Positive phase 
         # Run the hidden update and 
         # GET THE PROBABILITIES (see Hinton ch. 3 )
-        self.updateHidden( v_example, mode = "Pr" ) 
+        self.hp = self.updateHidden( v_example, mode = "Pr" ) 
         
         # Compute positive contribute for SGD
         # Get a matrix in R^{ N+1, M+1 } 
@@ -226,45 +279,51 @@ class BaseRBM:
         
         # Gibbs Sampling for the negative learning phase
         # Use only PROBABILITIES except for the last sampling
-        for k in range( SGS ):
-            if not k == SGS-1:
-                self.updateVisible( self.hp, mode = "Pr" )
-                self.updateHidden(  self.vp, mode = "Pr" )
-            else:
-                # Get the total visible state
-                self.updateVisible( self.hp, mode = "Total" )
-                # Obtain also the hidden state
-                self.updateHidden( self.vp, mode = "Total" )
+        for k in range( SGS-1 ):
+            self.vp = self.updateVisible( self.hp, mode = "Pr" )
+            self.hp = self.updateHidden(  self.vp, mode = "Pr" )
+
+        # Get the total visible state
+        self.vp, self.v = self.updateVisible( self.hp, mode = "Total" )
+        # Obtain also the hidden state
+        self.hp, self.h = self.updateHidden( self.vp, mode = "Total" )
         
         # Compute negative contribute for SGD
         # Again, obtain a matrix in R^{ N+1, M+1 }
         delta_neg = np.dot( self.vp.T, self.hp )
                         
         # Update the weights (and biases) 
-        return  (delta_pos - delta_neg )
+        return  delta_pos - delta_neg 
         
     """
     Gibbs Sampling function.
     -----------------------
     Input arguments: 
         v_init, initial state (if present) of the machine in the visible layer
-        h_init, initial hidden state of the machine, if presente
+        h_init, initial hidden state of the machine, if present
         SGS, number of Steps of the Gibbs Sampling used in CD
 
-    Create a MCMC either from a visible or a hidden state that makes the machine
-    daydream.
+    Create a MCMC either from a visible or a hidden state that makes the machine  daydream for SGS steps.
     """
-    def GibbsSampling( self, v_init = np.array([]), h_init = np.array( [] ), SGS = 1 ):
+    def GibbsSampling( self, v_init = np.empty(0), h_init = np.empty(0), SGS = 1 ):
+        # Determine where the chain starts
+        if v_init.size > 0:
+            v_samples = v_init
+        else:
+            h_samples = h_init
+        
+        # Repeat SGS times
         for k in range( SGS ):
-            if h_init.size == 0:
+            if v_init.size > 0:
                 # Complete Gibbs Sampling starting from a visible state
-                self.updateHidden( v_init )
-                self.updateVisible( self.h )
+                __, h_samples = self.updateHidden( v_samples )
+                __, v_samples = self.updateVisible( h_samples )
             else:
                 # Complete Gibbs Sampling starting from a hidden state
-                self.updateVisible( h_init )
-                self.updateHidden( self.v )
-
+                __, v_samples = self.updateVisible( h_samples )
+                __, h_samples = self.updateHidden( v_samples )
+        
+        return v_samples, h_samples
     
     """
     Activation function.
@@ -282,7 +341,7 @@ class BaseRBM:
     Computation of the hidden state from a visible one.
     ---------------------------------------------------
     Input arguments:
-        x, input visible state
+        x, input visible state or mini-batch
         mode, string, equal to "Total" or "Pr", to specify if only probabilities should be used.
         
     Update the vector of probabilities of activations of the hidden units, together with 
@@ -291,31 +350,35 @@ class BaseRBM:
     def updateHidden( self, x, mode = "Total" ):
         if x.ndim == 1:
             net = np.dot( self.W.T, x )            
-            self.hp = self.__phi( net )
+            hp = self.__phi( net )
             # Definition of bias unit that is always active
-            self.hp[0] = 1
+            hp[0] = 1
             if mode == "Total":
                 y = np.random.rand( self.M+1 )
                 # Redefine visible state
-                self.h = np.zeros_like( self.hp ) 
-                self.h[ self.hp >= y ] = 1
+                h = np.zeros_like( hp ) 
+                h[ hp >= y ] = 1
         else:
             net = np.dot( x, self.W )            
-            self.hp = self.__phi( net )
+            hp = self.__phi( net )
             # Definition of bias unit that is always active
-            self.hp[:, 0] = 1
+            hp[:, 0] = 1
             if mode == "Total":
-                y = np.random.rand( self.hp.shape[0], self.M+1 )
+                y = np.random.rand( hp.shape[0], self.M+1 )
                 # Redefine visible states
-                self.h = np.zeros_like( self.hp ) 
-                self.h[ self.hp >= y ] = 1
-
+                h = np.zeros_like( hp ) 
+                h[ hp >= y ] = 1
+        
+        if mode == "Total":
+            return hp, h
+        else:
+            return hp
     
     """
     Computation of the visible state from a hidden one.
     ---------------------------------------------------
     Input arguments:
-        x, input hidden state
+        x, input hidden state or mini-batch
         mode, string to specify if only probabilities should be used (mode = "Pr")
         
     Update the vector of probabilities of activations of the visible units, together with 
@@ -324,26 +387,42 @@ class BaseRBM:
     def updateVisible( self, x, mode = "Total" ):
         if x.ndim == 1:
             net = np.dot( self.W, x )            
-            self.vp = self.__phi( net )
-            # Definition of bias unit that is always active
-            self.vp[0] = 1
+            vp = self.__phi( net )
+            # The bias unit is always active
+            vp[0] = 1
             if mode == "Total":
                 y = np.random.rand( self.N+1 )
                 # Redefine visible state
-                self.v = np.zeros_like( self.vp ) 
-                self.v[ self.vp >= y ] = 1
+                v = np.zeros_like( vp ) 
+                v[ y <= vp ] = 1
         else:
             net = np.dot( x, self.W.T )            
-            self.vp = self.__phi( net )
-            # Definition of bias unit that is always active
-            self.vp[:, 0] = 1
+            vp = self.__phi( net )
+            vp[:, 0] = 1
             if mode == "Total":
-                y = np.random.rand( self.vp.shape[0], self.N+1 )
-                # Redefine visible states
-                self.v = np.zeros_like( self.vp ) 
-                self.v[ self.vp >= y ] = 1
+                y = np.random.rand( vp.shape[0], self.N+1 )
+                v = np.zeros_like( vp ) 
+                v[  y <= vp ] = 1
         
-                
+        if mode == "Total":
+            return vp, v
+        else:
+            return vp
+
+    """
+    Compute free energy of a given set or example.
+    -----------------------------------------------
+    """
+    def __freeEnergy(self, X):
+        if X.ndim == 1:
+            net = np.dot( self.W.T, X )
+            tmp = np.log(1+np.exp(net))
+            return  -np.dot( self.W.T[0], X) - np.sum( tmp )
+        else:
+            net = np.dot( X, self.W )
+            energies = -np.dot( X, self.W[:,0]) - np.sum( np.log(1+np.exp(net)), axis = 1  )
+            return np.sum( energies )        
+
 
     """
     Compute average free energies.
@@ -353,26 +432,15 @@ class BaseRBM:
         X_test,  test set
 
     As explained in Hinton's guide, use the comparison
-    of the average free energies of the two set of visibile instances 
+    of the average free energies of the two sets of visibile instances 
     to monitor the overfitting.
     """
-    def evaluateOverfitting( self, X_train, X_test):
-        def freeEnergy(v):
-            net = np.dot( self.W.T, v )
-            tmp = np.log(1+np.exp(net))
-            return  -np.dot( self.W.T[0], v) - np.sum( tmp )
-        
-        energy_tr = 0
-        for ind in range( len( X_train ) ):
-            energy_tr += freeEnergy( X_train[ind] )
-        avg_tr = energy_tr/len(X_train)
-        
-        energy_test = 0
-        for ind in range( len( X_test) ):
-            energy_test += freeEnergy( X_test[ind] )
-        avg_test = energy_test/len(X_test)
-        
-        return avg_tr, avg_test
+    def monitorOverfitting( self, X_train, X_test):            
+        avg_train = -self.__freeEnergy( X_train )/len(X_train)
+        avg_test =  -self.__freeEnergy( X_test )/len(X_test)
+        label = 'Average free energy'        
+        logl = 0
+        return avg_train, avg_test, label
 
     """
     Compute the partecipation ratio PR_a
@@ -485,8 +553,78 @@ class BaseRBM:
 # with rectified linear hidden units
 ##################################################
 class ReLU_RBM( BaseRBM ):
-    def __phi( self, x ):
+    def __init__( self, N, M, seed ):
+        super().__init__( N,M,seed )
+        del self.hp
 
+
+    """
+    Gibbs Sampling function.
+    -----------------------
+    Input arguments: 
+        v_init, initial state (if present) of the machine in the visible layer
+        h_init, initial hidden state of the machine, if present
+        SGS, number of Steps of the Gibbs Sampling used in CD
+
+    Create a MCMC either from a visible or a hidden state that makes the machine  daydream for SGS steps.
+    """
+    def GibbsSampling( self, v_init = np.empty(0), h_init = np.empty(0), SGS = 1 ):
+        # Determine where the chain starts
+        if v_init.size > 0:
+            v_samples = v_init
+        else:
+            h_samples = h_init
+        
+        # Repeat SGS times
+        for k in range( SGS ):
+            if v_init.size > 0:
+                # Complete Gibbs Sampling starting from a visible state
+                h_samples = self.updateHidden( v_samples )
+                __, v_samples = self.updateVisible( h_samples )
+            else:
+                # Complete Gibbs Sampling starting from a hidden state
+                __, v_samples = self.updateVisible( h_samples )
+                h_samples = self.updateHidden( v_samples )
+        
+        return v_samples, h_samples
+    
+    def __freeEnergy( self, v, beta = 1, W_ext = np.empty(0) ):
+        if W_ext.size > 0:
+            W = W_ext
+        else:
+            W = self.W
+ 
+        en_g = beta * np.dot( v, W[:,0] )
+        net = np.dot( W.T[1:,1:], v[1:] )
+        # The different sign of the \theta term is due to the fact that I use a convention
+        # different from Monasson, i.e. \theta = - \theta_{Monasson}
+        # TO BE CHANGED?
+        en_eff = 0.5*beta*np.linalg.norm( net + W[0,1:] )**2
+        arg_log = 1.0
+        # DEBUG
+        with np.errstate(divide='raise'):
+            try:
+                for mu in range( self.M ):
+                    tmp = net[mu]+W[0,mu+1]
+                    if tmp ==  0:
+                        arg_log *= np.sqrt( np.pi/(2*beta) )
+                    elif tmp > 0:
+                        arg_log *=  np.sqrt( np.pi/(2*beta) )*( 1. + special.erf( np.sqrt(beta/2)* tmp  ) )
+                    else:
+                        arg_log *= np.sqrt( np.pi/(2*beta) )*special.erfc( np.sqrt( beta/2 )*np.abs(tmp) ) 
+
+                en_eff += np.log( arg_log )
+            except FloatingPointError:
+                print( "FloatingPointError occured" )
+                print( net + W[0,1:], arg_log, beta )
+                print( special.erf( np.sqrt(beta/2)*np.abs( tmp ) ) )
+                print(1. + np.sign(tmp)*special.erf( np.sqrt(beta/2)*np.abs( tmp ) ))
+                input()
+        return -en_g - en_eff
+
+
+        
+    def __phi( self, x ):
         # Add gaussian noise with null mean  and unit variance
         # to all preactivations of the hidden units 
         # given in input
@@ -494,12 +632,6 @@ class ReLU_RBM( BaseRBM ):
             x = x + np.random.randn( self.M + 1 )
         else:
             x = x + np.random.randn( x.shape[0], self.M+1 )
-
-        #if x.ndim == 1:
-            #x = x + np.random.randn( self.M + 1 )
-        #else:
-            #for i in range(len(x)):
-                #x[i] +=  np.random.randn( self.M+1 )
 
         # Determine which hidden units are not active
         x[x<0] = 0
@@ -511,68 +643,255 @@ class ReLU_RBM( BaseRBM ):
     ---------------------------------------------------
     Input arguments:
         x, input visible state
+        W_ext, input weights (useful for AIS) 
         
     Update the hidden state of the machine. 
     """
-    def updateHidden( self, x ):
+    def updateHidden( self, x, W_ext = np.empty( 0 ) ):
+        if W_ext.size > 0:
+            W = W_ext
+        else:
+            W = self.W
+            
         if x.ndim == 1:
-            net = np.dot( self.W.T, x )
-            self.h = self.__phi( net )
+            net = np.dot( W.T, x )
+            h = self.__phi( net )
             
             # Definition of bias unit that is always active
-            self.h[0] = 1
+            h[0] = 1
         else:
-            net = np.dot( x, self.W )
-            self.h = self.__phi( net )
+            net = np.dot( x, W )
+            h = self.__phi( net )
             # Definition of bias unit that is always active
-            self.h[:,0] = 1
+            h[:,0] = 1
     
+        return h
     """
     Contrastive divergence.
     --------------------------------------------
     
     """
-    def CD( self, v_example, SGS ):
-        # DEBUG
-        #set_trace()
-        
+    def CD( self, v_example, SGS ):        
         
         # Positive phase 
         # Get the new hidden state
-        self.updateHidden( v_example ) 
+        self.h = self.updateHidden( v_example ) 
         
         # Compute positive contribute for SGD
         # Get a matrix in R^{ N+1, M+1 } 
         delta_pos = np.dot( v_example.T, self.h )
         
-        ### DEBUG
-        #delta_pos_2 = np.zeros_like( delta_pos )
-        #for i in range( len( v_example ) ):
-            #delta_pos_2 += np.outer( v_example[i], self.h[i] )
-            
-        
         # Negative phase
         # Make the machine daydream, starting from the hidden state
         # obtained in the positive phase
-        
-        # Gibbs Sampling for the negative learning phase
-        # Use only PROBABILITIES except for the last sampling
-        for k in range( SGS ):
-            if not k == SGS-1:
-                super().updateVisible( self.h, mode = "Pr" )
-                self.updateHidden(  self.vp )
-            else:
-                # Get the total visible state
-                super().updateVisible( self.h, mode = "Total" )
-                # Obtain also the hidden state
-                self.updateHidden( self.vp  )
-        
+                # Gibbs Sampling for the negative learning phase
+        for k in range( SGS-1 ):
+            self.vp, self.v = super().updateVisible( self.h, mode = "Pr" )
+            self.h = self.updateHidden(  self.vp )
+
+        # Get the final visible state
+        self.vp, self.v = super().updateVisible( self.h, mode = "Total" )
+        # Obtain also the hidden state
+        self.h = self.updateHidden( self.v  )
+    
         # Compute negative contribute for SGD
         # Again, obtain a matrix in R^{ N+1, M+1 }
-        delta_neg = np.dot( self.vp.T, self.h )
+        delta_neg = np.dot( self.v.T, self.h )
  
         # Update the weights (and biases) 
         return  (delta_pos - delta_neg )
 
+    """
+    Persistent Contrastive Divergence.
+    --------------------------------------------
+    
+    """
+    def PCD( self, X, SGS, num_chains ):
+        ###### Initialize the chains, if necessary
+        if  not( hasattr( self, 'v_chains' ) ):
+            # Generate bynary random states (see Hinton's guide pag. 4) 
+            self.v_chains = np.random.randint( 2, size=(num_chains, self.N )  )
+            # Add dimension for the biases
+            self.v_chains = np.insert( self.v_chains, 0, 1, axis = 1 )
+            # Compute the correspondent hidden states
+            self.h_chains = self.updateHidden( self.v_chains ) 
+        
+        ###### Positive phase 
+        # Compute the hidden states corresponding to the mini-batch X
+        self.h = self.updateHidden( X ) 
+        
+        # Compute positive contribute for SGD
+        # Get a matrix in R^{ N+1, M+1 } 
+        delta_pos = np.dot( X.T, self.h )
+        
+        ###### Negative phase
+        # Compute negative contribute for SGD
+        # Again, obtain a matrix in R^{ N+1, M+1 }
+        delta_neg = np.dot( self.v_chains.T, self.h_chains )
+        
+        # DEBUG
+        #np.set_printoptions( precision=0, linewidth=1000 )
+        #print( "w_\{01\}^+" )
+        ##print( X.T[0] )
+        #print( np.dot( X, self.W )[:,1] )
+        #print( self.h[:,1] )
+        #print( np.dot( X.T[0], self.h[:,1] ) )
+        #print( "w_\{01\}^-" )
+        ##print( self.v_chains.T[0] )
+        #print( np.dot( self.v_chains, self.W )[:,1] )
+        #print( self.h_chains[:,1] )
+        #print( np.dot( self.v_chains.T[0], self.h_chains[:,1] ) )
+        #print( "Delta_W" )
+        #print( delta_pos - delta_neg )
+        
+        # Return the update for the weights (and biases) 
+        return  delta_pos - delta_neg 
     
         
+
+
+
+    """
+    Annealed Importance Sampling algorithm.
+    -----------------------------------------
+    Input arguments: 
+        n_tot, total number of runs (that is M in the notation of Salakhutdinov)
+        K, total number of samplings
+        
+    Get an approximation of the partition function of an RBM, using the AIS algorithm 
+    defined in Salakhutdinov's article. In particular, it is considered a reference
+    RBM, denoted as A, with null weight matrix and null ReLU-thresholds as the starting point
+    of the annealing.
+    """
+    def AIS( self, K, n_tot ):
+        # Define importance weights
+        w = np.zeros( n_tot )
+        
+        # Define the weight matrix for the reference RBM 
+        W_A = np.zeros( (self.N+1, self.M+1), dtype = float )
+        W_A[:,0] = self.W[:,0] 
+        #W_A[0,:] = self.W[0,:] 
+        
+        
+        # Compute Z for the reference RBM
+        # TO BE CHANGED?
+        #Z_A = 2**self.M * np.prod( 1 + np.exp( self.W[1:,0] ) )
+        Z_A = np.sqrt(np.pi/2)**self.M * np.prod( 1 + np.exp( self.W[1:,0] ) )
+        #term_hidden = 1.0
+        #for mu in range( self.M ):
+            #theta = W_A[0, mu+1]
+            #term_hidden *= np.exp( -theta**2/2.0 )*np.sqrt( np.pi/2.0 )
+            #if theta > 0:
+                #term_hidden *= 1 + special.erf( theta/np.sqrt(2) )
+            #elif theta < 0:
+                #term_hidden *= special.erfc( -theta/np.sqrt(2) )
+        #Z_A = np.prod( 1.0 + np.exp( self.W[1:,0] ) )*term_hidden
+        
+        
+
+        # Define the marginalized distribution for the reference RBM
+        p_A = 1.0/( 1 + np.exp(-self.W[1:,0]) )
+        
+        # Repeat n_tot times the annealing
+        for i in range( n_tot ):
+            # Generate the v's sequence
+            for k in range( K ):
+                # Define the inverse temperatures for the transition operator 
+                # and the computation of w_i
+                beta_curr = k*1.0/K
+                beta_next = (k+1)*1.0/K
+
+                if k == 0:
+                    # Define the visible vector that spans the sequence v_1, ..., v_K
+                    v_curr =  np.zeros( self.N, dtype= float )
+                    # Add a dimension for the biases
+                    v_curr = np.insert( v_curr, 0, 1, axis = 0)
+        
+                    # Sample v_1 through the marginalized of the reference RBM
+                    y = np.random.rand( self.N ) 
+                    v_curr[1:] = (y <= p_A)
+                    
+                    # Compute the starting contribution to w: p^*_1(v_1)/p^*_0(v_1)
+                    w[i] = np.exp( -self.__freeEnergy( v_curr, 1.0-beta_next, W_A )-self.__freeEnergy( v_curr, beta_next )+ self.__freeEnergy( v_curr, 1.0-beta_curr, W_A ) )
+            
+                else:                        
+                    # Compute h_A
+                    h_A = self.updateHidden( (1-beta_curr) * v_curr, W_ext = W_A )
+                    
+                    # Compute h_B
+                    h_B = self.updateHidden( beta_curr * v_curr )
+                    
+                    # Update v_curr through h_A, h_B 
+                    net = (1-beta_curr) * np.dot( W_A, h_A ) + beta_curr * np.dot( self.W, h_B )            
+                    vp = 1.0/(1 + np.exp( -net ) )
+                    y = np.random.rand( self.N )
+                    v_curr[1:] = (y <= vp[1:])                     
+                
+                    # Update the i-th importance weight
+                    # Check if beta_next == 1.0
+                    if k < K-1:
+                        w[i] *=  np.exp( -self.__freeEnergy( v_curr, 1.0-beta_next, W_A )-self.__freeEnergy( v_curr, beta_next ) + self.__freeEnergy( v_curr, 1.0-beta_curr, W_A ) + self.__freeEnergy( v_curr, beta_curr ) )
+                    else:
+                        w[i] *=  np.exp( -self.__freeEnergy( v_curr, beta_next ) +self.__freeEnergy( v_curr, 1.0-beta_curr, W_A ) + self.__freeEnergy( v_curr, beta_curr ) )
+ 
+                
+        Z_approx = np.sum( w )/n_tot * Z_A
+        return Z_approx
+        
+        
+    """
+    Compute average log-likelihood.
+    ------------------------------
+    Input arguments:
+        X_train, training set (at least a subset)
+        X_test,  test set
+
+    As explained in Monasson's article and in Hinton's guide, use the comparison of the average log-likelihood of the two sets of visibile instances  to monitor the overfitting.
+    """
+    def monitorOverfitting( self, X_train, X_test):            
+        
+        # DEBUG        
+        #n_runs = 10 
+        #Z_c = np.zeros( n_runs )
+        #for j in range(n_runs):
+            #Z_c[j] = self.AIS( K=10, n_tot = 1 )/Z_A
+        #print( "r_AIS = {} +/- {}".format( np.mean( Z_c ), np.std( Z_c ) ) )
+
+        #Z_c = np.zeros( n_runs )
+        #for j in range( n_runs ):
+            #Z_c[j] = self.AIS( K=100, n_tot = 1 )/Z_A
+        #print( "r_AIS = {} +/- {}".format( np.mean( Z_c ), np.std( Z_c ) ) )
+
+        #Z_c = np.zeros( n_runs )
+        #for j in range( n_runs ):
+            #Z_c[j] = self.AIS( K=500, n_tot = 1 )/Z_A
+        #print( "r_AIS = {} +/- {}".format( np.mean( Z_c ), np.std( Z_c ) ) )
+
+        #Z_c = np.zeros( n_runs )
+        #for j in range( n_runs ):
+            #Z_c[j] = self.AIS( K=10000, n_tot = 1 )/Z_A
+        #print( "r_AIS = {} +/- {}".format( np.mean( Z_c ), np.std( Z_c ) ) )
+        #Z_A = np.sqrt(np.pi/2)**self.M * np.prod( 1 + np.exp( self.W[1:,0] ) )
+        #log_pstar = 0
+        #Z_approx = self.AIS( K=100, n_tot = 5 )
+        #for x in X_train:
+            ## DEBUG
+            #log_pstar -=  self.__freeEnergy( x )  
+        #avg_train = log_pstar/len(X_train)  - np.log(Z_approx)
+        
+        #log_pstar = 0
+        #for x in X_test:
+            #log_pstar -=  self.__freeEnergy( x )  
+        #avg_test = log_pstar/len(X_test)  - np.log(Z_approx)
+        
+        #input()
+        label = 'Average free-energies'        
+        # DEBUG
+        avg_train = 0
+        for x in X_train:
+            avg_train += -self.__freeEnergy( x )/len(X_train)
+        avg_test = 0
+        for x in X_test:
+            avg_test += -self.__freeEnergy( x )/len(X_test)
+
+        return avg_train, avg_test, label
