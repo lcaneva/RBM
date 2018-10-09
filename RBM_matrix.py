@@ -101,6 +101,12 @@ class BaseRBM:
         p_arr = np.zeros( int(nEpochs/period_ovf), dtype = float )        
         ovf_train = np.zeros( int(nEpochs/period_ovf), dtype = float )
         ovf_test = np.zeros( int(nEpochs/period_ovf), dtype = float )        
+        # DEBUG
+        ovf_train = np.zeros( int(nEpochs/period_ovf), dtype = float )
+        ovf_test = np.zeros( int(nEpochs/period_ovf), dtype = float )        
+        ovf_train_2 = np.zeros( int(nEpochs/period_ovf), dtype = float )
+        ovf_test_2 = np.zeros( int(nEpochs/period_ovf), dtype = float )        
+        
         velocity = np.zeros( (self.N+1, self.M+1) )        
         
         # Iterate through X_train nEpochs times
@@ -163,7 +169,7 @@ class BaseRBM:
             # Compute the energies and the sparsity
             if plots:
                 if t % period_ovf == 0:
-                    ovf_train[counter], ovf_test[counter],label = self.monitorOverfitting( X_train, X_test )
+                    ovf_train[counter], ovf_test[counter],label, ovf_train_2[counter], ovf_test_2[counter] = self.monitorOverfitting( X_train, X_test )
                     if ovf_train[counter] > 0 or ovf_test[counter] > 0:
                         print("Positive log-likelihood!")
                     p_arr[counter], aux, T = self.analyzeWeights() 
@@ -213,7 +219,16 @@ class BaseRBM:
             plt.legend()
             plt.ylabel(label)
             plt.xlabel('Epochs')
+
+            plt.figure()
+            plt.plot([period_ovf*i for i in range( len( ovf_train ) )], ovf_train_2, label="Training set" )
+            plt.plot([period_ovf*i for i in range( len( ovf_test ) )], ovf_test_2, label = "Test set")
+            plt.plot([period_ovf*i for i in range( len( ovf_train ) )], np.zeros(len(ovf_train)) )
+            plt.legend()
+            plt.ylabel(label)
+            plt.xlabel('Epochs')
             plt.show()
+
 
     """
     Regularization function.
@@ -421,8 +436,8 @@ class BaseRBM:
     to monitor the overfitting.
     """
     def monitorOverfitting( self, X_train, X_test):            
-        avg_train = self.__freeEnergy( X_train )/len(X_train)
-        avg_test =  self.__freeEnergy( X_train )/len(X_test)
+        avg_train = -self.__freeEnergy( X_train )/len(X_train)
+        avg_test =  -self.__freeEnergy( X_test )/len(X_test)
         label = 'Average free energy'        
         logl = 0
         return avg_train, avg_test, label
@@ -605,10 +620,13 @@ class ReLU_RBM( BaseRBM ):
             try:
                 for mu in range( self.M ):
                     tmp = net[mu]+W[0,mu+1]
-                    if tmp > 0:
-                        arg_log *=  np.sqrt( np.pi/(2*beta) )*( 1. + np.sign(tmp)*special.erf( np.sqrt(beta/2)*np.abs( tmp ) ) )
+                    if tmp ==  0:
+                        arg_log *= np.sqrt( np.pi/(2*beta) )
+                    elif tmp > 0:
+                        arg_log *=  np.sqrt( np.pi/(2*beta) )*( 1. + special.erf( np.sqrt(beta/2)* tmp  ) )
                     else:
-                        arg_log *= np.sqrt( np.pi/(2*beta) )*special.erfc( np.sqrt( beta/2 )*-tmp ) 
+                        arg_log *= np.sqrt( np.pi/(2*beta) )*special.erfc( np.sqrt( beta/2 )*np.abs(tmp) ) 
+
                 en_eff += np.log( arg_log )
             except FloatingPointError:
                 print( "FloatingPointError occured" )
@@ -633,15 +651,29 @@ class ReLU_RBM( BaseRBM ):
     def AIS( self, K, n_tot ):
         # Define importance weights
         w = np.zeros( n_tot )
+        
+        # Define the weight matrix for the reference RBM 
+        W_A = np.zeros( (self.N+1, self.M+1), dtype = float )
+        W_A[:,0] = self.W[:,0] 
+        #W_A[0,:] = self.W[0,:] 
+        
+        
         # Compute Z for the reference RBM
         # TO BE CHANGED?
         #Z_A = 2**self.M * np.prod( 1 + np.exp( self.W[1:,0] ) )
         Z_A = np.sqrt(np.pi/2)**self.M * np.prod( 1 + np.exp( self.W[1:,0] ) )
-
-        # Define the weight matrix for the reference RBM 
-        W_A = np.zeros( (self.N+1, self.M), dtype = float )
-        W_A = np.insert( W_A, 0, self.W[:,0], axis = 1 ) 
+        #term_hidden = 1.0
+        #for mu in range( self.M ):
+            #theta = W_A[0, mu+1]
+            #term_hidden *= np.exp( -theta**2/2.0 )*np.sqrt( np.pi/2.0 )
+            #if theta > 0:
+                #term_hidden *= 1 + special.erf( theta/np.sqrt(2) )
+            #elif theta < 0:
+                #term_hidden *= special.erfc( -theta/np.sqrt(2) )
+        #Z_A = np.prod( 1.0 + np.exp( self.W[1:,0] ) )*term_hidden
         
+        
+
         # Define the marginalized distribution for the reference RBM
         p_A = 1.0/( 1 + np.exp(-self.W[1:,0]) )
         
@@ -702,45 +734,55 @@ class ReLU_RBM( BaseRBM ):
     As explained in Monasson's article and in Hinton's guide, use the comparison of the average log-likelihood of the two sets of visibile instances  to monitor the overfitting.
     """
     def monitorOverfitting( self, X_train, X_test):            
+        
+        # DEBUG        
+        #n_runs = 10 
+        #Z_c = np.zeros( n_runs )
+        #for j in range(n_runs):
+            #Z_c[j] = self.AIS( K=10, n_tot = 1 )/Z_A
+        #print( "r_AIS = {} +/- {}".format( np.mean( Z_c ), np.std( Z_c ) ) )
+
+        #Z_c = np.zeros( n_runs )
+        #for j in range( n_runs ):
+            #Z_c[j] = self.AIS( K=100, n_tot = 1 )/Z_A
+        #print( "r_AIS = {} +/- {}".format( np.mean( Z_c ), np.std( Z_c ) ) )
+
+        #Z_c = np.zeros( n_runs )
+        #for j in range( n_runs ):
+            #Z_c[j] = self.AIS( K=500, n_tot = 1 )/Z_A
+        #print( "r_AIS = {} +/- {}".format( np.mean( Z_c ), np.std( Z_c ) ) )
+
+        #Z_c = np.zeros( n_runs )
+        #for j in range( n_runs ):
+            #Z_c[j] = self.AIS( K=10000, n_tot = 1 )/Z_A
+        #print( "r_AIS = {} +/- {}".format( np.mean( Z_c ), np.std( Z_c ) ) )
+
+        #input()
         label = 'Average log-likelihood'        
-        logl = 0
-        # DEBUG
+        log_pstar = 0
         Z_A = np.sqrt(np.pi/2)**self.M * np.prod( 1 + np.exp( self.W[1:,0] ) )
-        
-        n_runs = 10 
-        Z_c = np.zeros( n_runs )
-        for j in range(n_runs):
-            Z_c[j] = self.AIS( K=10, n_tot = 1 )/Z_A
-        print( "r_AIS = {} +/- {}".format( np.mean( Z_c ), np.std( Z_c ) ) )
 
-        Z_c = np.zeros( n_runs )
-        for j in range( n_runs ):
-            Z_c[j] = self.AIS( K=100, n_tot = 1 )/Z_A
-        print( "r_AIS = {} +/- {}".format( np.mean( Z_c ), np.std( Z_c ) ) )
-
-        Z_c = np.zeros( n_runs )
-        for j in range( n_runs ):
-            Z_c[j] = self.AIS( K=500, n_tot = 1 )/Z_A
-        print( "r_AIS = {} +/- {}".format( np.mean( Z_c ), np.std( Z_c ) ) )
-
-        Z_c = np.zeros( n_runs )
-        for j in range( n_runs ):
-            Z_c[j] = self.AIS( K=10000, n_tot = 1 )/Z_A
-        print( "r_AIS = {} +/- {}".format( np.mean( Z_c ), np.std( Z_c ) ) )
-
-        input()
-        
-        Z_approx = self.AIS( K=50, n_tot = 5 )
+        Z_approx = self.AIS( K=100, n_tot = 5 )
         for x in X_train:
-            logl +=   -self.__freeEnergy( x )  - np.log(Z_approx) 
-        avg_train = logl/len(X_train)
+            # DEBUG
+            log_pstar -=  self.__freeEnergy( x )  
+        avg_train = log_pstar/len(X_train)  - np.log(Z_approx)
         
-        logl = 0
+        log_pstar = 0
         for x in X_test:
-            logl +=   -self.__freeEnergy( x )  - np.log(Z_approx) 
-        avg_test = logl/len(X_test)
+            log_pstar -=  self.__freeEnergy( x )  
+        avg_test = log_pstar/len(X_test)  - np.log(Z_approx)
+        
+        
+        # DEBUG
+        avg_train_2 = 0
+        for x in X_train:
+            avg_train_2 += -self.__freeEnergy( x )/len(X_train)
+        avg_test_2 = 0
+        for x in X_test:
+            avg_test_2 += -self.__freeEnergy( x )/len(X_test)
 
-        return avg_train, avg_test, label
+        return avg_train, avg_test, label, avg_train_2, avg_test_2
 
         
     def __phi( self, x ):
