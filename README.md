@@ -1,4 +1,4 @@
 # RBM
-Implementation of RBMs with ReLU units for Master's thesis.
+Implementation of a Resticted Boltzmann Machine with ReLU hidden units for Master's thesis.
 
-Branch to be used for the implementation of Annealed Importance Sampling algorithm.
+RBM.py contains the two classes BaseRBM and ReLU_RBM that actually implement the RBMs, while in main.py there is all the auxiliar code, from the construction of the dataset to the I/O interface.
