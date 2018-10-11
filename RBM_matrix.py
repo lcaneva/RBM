@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pudb import set_trace
 from scipy import special
+import seaborn as sns
 
 ##################################################
 # Class for Restricted Boltzmann Machines
@@ -101,18 +102,11 @@ class BaseRBM:
         p_arr = np.zeros( int(nEpochs/period_ovf), dtype = float )        
         ovf_train = np.zeros( int(nEpochs/period_ovf), dtype = float )
         ovf_test = np.zeros( int(nEpochs/period_ovf), dtype = float )        
-        # DEBUG
-        ovf_train = np.zeros( int(nEpochs/period_ovf), dtype = float )
-        ovf_test = np.zeros( int(nEpochs/period_ovf), dtype = float )        
-        ovf_train_2 = np.zeros( int(nEpochs/period_ovf), dtype = float )
-        ovf_test_2 = np.zeros( int(nEpochs/period_ovf), dtype = float )        
         
         velocity = np.zeros( (self.N+1, self.M+1) )        
         
         # Iterate through X_train nEpochs times
         for t in range( nEpochs ):
-            #if self.W[0,1] > 1e3:
-                #set_trace()
             # Compute the contribution to the weight updates deriving from the log-likelihood (heuristically) 
             if LA == 'CD':
                 W_updates = epsilon/sizeMB * self.CD( X_train, SGS )
@@ -141,38 +135,27 @@ class BaseRBM:
             
             # Update the Markov chains, if using PCD
             if LA == 'PCD':
-                # DEBUG
-                #for i in range(len(self.v_chains)):
-                    #print( self.v_chains[i], self.h_chains[i] ) 
-                
                 # Update the chains
                 self.v_chains, self.h_chains = self.GibbsSampling( h_init = self.h_chains, SGS=1 )
-                
-                ##DEBUG
-                #for i in range(len(self.v_chains)):
-                    #print( self.v_chains[i], self.h_chains[i] ) 
-                #input()
             
             # Update the coefficients
-            if t % period == 0:
-                # Geometric decay of the learning rate
-                epsilon *= c_e 
+            #if t % period == 0:
+            ## Geometric decay of the learning rate
+            #epsilon *= c_e 
                 
-                # Increase alpha towards the end of learning
+                # Increase alpha and decrease epsilon towards the end of learning
                 if t > nEpochs*0.5: 
+                    epsilon *= c_e 
                     alpha *= c_a
                 
-                ## DEBUG
-                #print( t, self. h )
-                #print( self.W )
-                #input()
             # Compute the energies and the sparsity
             if plots:
                 if t % period_ovf == 0:
-                    ovf_train[counter], ovf_test[counter],label, ovf_train_2[counter], ovf_test_2[counter] = self.monitorOverfitting( X_train, X_test )
-                    if ovf_train[counter] > 0 or ovf_test[counter] > 0:
-                        print("Positive log-likelihood!")
-                    p_arr[counter], aux, T = self.analyzeWeights() 
+                    ovf_train[counter], ovf_test[counter],label = self.monitorOverfitting( X_train, X_test )
+                    # DEBUG
+                    #if ovf_train[counter] > 0 or ovf_test[counter] > 0:
+                        #print("Positive log-likelihood!")
+                    p_arr[counter], __, T = self.analyzeWeights() 
                     counter += 1
 
             # Print statistics of the current epoch
@@ -186,15 +169,11 @@ class BaseRBM:
                 print( "Correct reconstructions (%%) = %.2f \n" % nCorrect[t] ) 
                 
                 np.set_printoptions( linewidth = 1000, formatter={'all':lambda x: str(x) if x > 0 else '_'} )
-                for i in range( sizeMB ):
+                for i in range( 10 ):
                     print( X_train[i].astype(int) )
                     print( v_rec[i].astype(int), "\t{:.2f}".format( np.linalg.norm(X_train[i] - v_rec[i])**2), "\n"  )
                 np.set_printoptions()
-
-            #print("---------------Epoch {}--------------".format(t+1))
-            #print( "Mean Squared Error = ", MRE[t] )
-            #print( "Correct reconstructions (%%) = %.2f \n" % nCorrect[t] ) 
-        
+                        
 
         # Make plots for the current mini-batch, if required
         if plots:
@@ -210,25 +189,14 @@ class BaseRBM:
             plt.plot([period_ovf*i for i in range( len( p_arr ) )], p_arr )
             plt.ylabel('Sparsity')
             plt.xlabel('Epochs')
-            plt.show()            
             # Monitor the overfitting
             plt.figure()
             plt.plot([period_ovf*i for i in range( len( ovf_train ) )], ovf_train, label="Training set" )
             plt.plot([period_ovf*i for i in range( len( ovf_test ) )], ovf_test, label = "Test set")
-            plt.plot([period_ovf*i for i in range( len( ovf_train ) )], np.zeros(len(ovf_train)) )
-            plt.legend()
-            plt.ylabel(label)
-            plt.xlabel('Epochs')
-
-            plt.figure()
-            plt.plot([period_ovf*i for i in range( len( ovf_train ) )], ovf_train_2, label="Training set" )
-            plt.plot([period_ovf*i for i in range( len( ovf_test ) )], ovf_test_2, label = "Test set")
-            plt.plot([period_ovf*i for i in range( len( ovf_train ) )], np.zeros(len(ovf_train)) )
             plt.legend()
             plt.ylabel(label)
             plt.xlabel('Epochs')
             plt.show()
-
 
     """
     Regularization function.
@@ -290,7 +258,7 @@ class BaseRBM:
         
         # Compute negative contribute for SGD
         # Again, obtain a matrix in R^{ N+1, M+1 }
-        delta_neg = np.dot( self.vp.T, self.hp )
+        delta_neg = np.dot( self.v.T, self.hp )
                         
         # Update the weights (and biases) 
         return  delta_pos - delta_neg 
@@ -436,8 +404,8 @@ class BaseRBM:
     to monitor the overfitting.
     """
     def monitorOverfitting( self, X_train, X_test):            
-        avg_train = -self.__freeEnergy( X_train )/len(X_train)
-        avg_test =  -self.__freeEnergy( X_test )/len(X_test)
+        avg_train = self.__freeEnergy( X_train )/len(X_train)
+        avg_test =  self.__freeEnergy( X_test )/len(X_test)
         label = 'Average free energy'        
         logl = 0
         return avg_train, avg_test, label
@@ -458,7 +426,19 @@ class BaseRBM:
         else:
             PR = 0
         return PR
-        
+    
+    def reconstructionScore( self, X, y = None ):
+            # Obtain the reconstruction given by the machine
+            self.v, self.h = BM.GibbsSampling( v_init = X, SGS = 1 )
+
+            # Compute its distance from the real visible state
+            for x in X:
+                dist = np.linalg.norm( X[i] - self.v[i] )**2
+                MRE += dist
+            
+            return MRE/len(X)
+    
+    
     """
     Determine sparsity and effective temperature.
     ------------------------------------------------
@@ -532,13 +512,9 @@ class BaseRBM:
         # Compute \tilde{m}        
         if L > 0:
             net = np.dot( self.W.T[1:,1:], x[1:] )
-            if np.sum( net != 0):
+            if np.sum( net != 0 ):
                 ind = np.argsort( net ) 
                 m_sorted = m[ind] 
-                ## DEBUG
-                #print( net, m )
-                #print( "After ordering" )
-                #print( net[ind], m_sorted )
             else:
                 m_sorted= np.sort( m )
             m_t = 1.0/L * np.sum( m_sorted[-L:] )
@@ -599,27 +575,14 @@ class ReLU_RBM( BaseRBM ):
         # The different sign of the \theta term is due to the fact that I use a convention
         # different from Monasson, i.e. \theta = - \theta_{Monasson}
         # TO BE CHANGED?
-        en_eff = 0.5*beta*np.linalg.norm( net + W[0,1:] )**2
+        en_eff = 0.5*beta*np.linalg.norm( net + W[0,1:] )**2 
         arg_log = 1.0
-        # DEBUG
-        with np.errstate(divide='raise'):
-            try:
-                for mu in range( self.M ):
-                    tmp = net[mu]+W[0,mu+1]
-                    if tmp ==  0:
-                        arg_log *= np.sqrt( np.pi/(2*beta) )
-                    elif tmp > 0:
-                        arg_log *=  np.sqrt( np.pi/(2*beta) )*( 1. + special.erf( np.sqrt(beta/2)* tmp  ) )
-                    else:
-                        arg_log *= np.sqrt( np.pi/(2*beta) )*special.erfc( np.sqrt( beta/2 )*np.abs(tmp) ) 
+        for mu in range( self.M ):
+            tmp = net[mu]+W[0,mu+1]
+            arg_log *= np.sqrt( np.pi/(2*beta) )*special.erfc( np.sqrt( beta/2 )*tmp ) 
 
-                en_eff += np.log( arg_log )
-            except FloatingPointError:
-                print( "FloatingPointError occured" )
-                print( net + W[0,1:], arg_log, beta )
-                print( special.erf( np.sqrt(beta/2)*np.abs( tmp ) ) )
-                print(1. + np.sign(tmp)*special.erf( np.sqrt(beta/2)*np.abs( tmp ) ))
-                input()
+        en_eff += np.log( arg_log )
+        
         return -en_g - en_eff
 
 
@@ -666,12 +629,21 @@ class ReLU_RBM( BaseRBM ):
             h[:,0] = 1
     
         return h
+
+
+    """
+    """
+    def __computeOffset( self, h ):
+        set_trace()
+        return -np.sqrt(2/np.pi)*np.exp( -np.power( h,2 )/2 )/special.erfc( -h/np.sqrt(2) )
+
+
     """
     Contrastive divergence.
     --------------------------------------------
     
     """
-    def CD( self, v_example, SGS ):        
+    def CD( self, v_example, SGS ):      
         
         # Positive phase 
         # Get the new hidden state
@@ -680,22 +652,22 @@ class ReLU_RBM( BaseRBM ):
         # Compute positive contribute for SGD
         # Get a matrix in R^{ N+1, M+1 } 
         delta_pos = np.dot( v_example.T, self.h )
-        
+
         # Negative phase
         # Make the machine daydream, starting from the hidden state
         # obtained in the positive phase
-                # Gibbs Sampling for the negative learning phase
+        # Gibbs Sampling for the negative learning phase
         for k in range( SGS-1 ):
-            self.vp, self.v = super().updateVisible( self.h, mode = "Pr" )
-            self.h = self.updateHidden(  self.vp )
+            __, self.v = super().updateVisible( self.h, mode = "Total" )
+            self.h = self.updateHidden( self.v )
 
         # Get the final visible state
         self.vp, self.v = super().updateVisible( self.h, mode = "Total" )
-        # Obtain also the hidden state
-        self.h = self.updateHidden( self.v  )
+        # Obtain the correspondent hidden state
+        self.h = self.updateHidden( self.vp  )
     
         # Compute negative contribute for SGD
-        # Again, obtain a matrix in R^{ N+1, M+1 }
+        # Obtain a matrix in R^{ N+1, M+1 }
         delta_neg = np.dot( self.v.T, self.h )
  
         # Update the weights (and biases) 
@@ -729,20 +701,6 @@ class ReLU_RBM( BaseRBM ):
         # Again, obtain a matrix in R^{ N+1, M+1 }
         delta_neg = np.dot( self.v_chains.T, self.h_chains )
         
-        # DEBUG
-        #np.set_printoptions( precision=0, linewidth=1000 )
-        #print( "w_\{01\}^+" )
-        ##print( X.T[0] )
-        #print( np.dot( X, self.W )[:,1] )
-        #print( self.h[:,1] )
-        #print( np.dot( X.T[0], self.h[:,1] ) )
-        #print( "w_\{01\}^-" )
-        ##print( self.v_chains.T[0] )
-        #print( np.dot( self.v_chains, self.W )[:,1] )
-        #print( self.h_chains[:,1] )
-        #print( np.dot( self.v_chains.T[0], self.h_chains[:,1] ) )
-        #print( "Delta_W" )
-        #print( delta_pos - delta_neg )
         
         # Return the update for the weights (and biases) 
         return  delta_pos - delta_neg 
@@ -774,9 +732,9 @@ class ReLU_RBM( BaseRBM ):
         
         
         # Compute Z for the reference RBM
-        # TO BE CHANGED?
-        #Z_A = 2**self.M * np.prod( 1 + np.exp( self.W[1:,0] ) )
+        # Reference RBM with null weights and ReLU thresholds
         Z_A = np.sqrt(np.pi/2)**self.M * np.prod( 1 + np.exp( self.W[1:,0] ) )
+        # Reference RBM with null weights but non-null ReLU thresholds
         #term_hidden = 1.0
         #for mu in range( self.M ):
             #theta = W_A[0, mu+1]
@@ -889,9 +847,9 @@ class ReLU_RBM( BaseRBM ):
         # DEBUG
         avg_train = 0
         for x in X_train:
-            avg_train += -self.__freeEnergy( x )/len(X_train)
+            avg_train += self.__freeEnergy( x )/len(X_train)
         avg_test = 0
         for x in X_test:
-            avg_test += -self.__freeEnergy( x )/len(X_test)
+            avg_test += self.__freeEnergy( x )/len(X_test)
 
         return avg_train, avg_test, label

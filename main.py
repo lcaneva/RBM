@@ -2,34 +2,28 @@
 Script to make the machine run
 
 To-do list:
-    - Velocizzare ulteriormente gli update usando Theano?
-    - Eliminare AIS BaseRBM
-    
-    - Capire perché le threshold "esplodono"
-    - Capire perché per N=40, M=20, L=2 la log-likelihood media diventa positiva
+    - Salvare self.h in dataset.csv
+    - Analisi delle ricostruzioni tramite medie condizionate anziché tramite un singolo Gibbs Sampling
 
+    - Determinazione della fase della macchina e comparazione con le performance di ricostruzione
+
+    - Reintrodurre alpha e vedere come varia la perfomance
+    - Confrontare la macchina regolarizzata con quella di default
+    - Controllare se la sparsità controlla \tilde{m}. Ripetere dopo aver cambiato dataset
+    - Confrontare PCD, CD-1 e CD-10
+
+    - Riguardare tutto il codice e togliere i commenti inutili
+    - Modificare le chiamate in maniera tale da definire parameters
+    - Implementare una grid evaluation per la scelta degli iperparametri
+    - Velocizzare ulteriormente gli update usando Theano?
+    - Unificare le funzioni per le due RBM e introdurre useReLU?
     - Spostare i grafici fit() fuori, se possibile
     - Cambiare i segni di g_i e \theta_{\mu} (solo nella rappresentazione?); si potrebbe introdurre una reference W_t e una W
       della matrice estesa o non
-    - Cercare CHANGE?
-
-    - Implementare e confronto Persistent Contrastive Divergence
-    - Rimettere epsilon variabile
-
-    - Controllare se la sparsità controlla \tilde{m}. Ripetere dopo aver cambiato dataset
-    - Cercare dei valori buoni per epsilon nel caso 40-20
-    - Reintrodurre alpha e vedere come varia la perfomance
-    - Confrontare la macchina regolarizzata con quella di default
-    - Determinazione della fase della macchina e comparazione con le performance di ricostruzione
-    
-    ----------------------------------------------------------------------------------------------------------    
     - Cambiare il nome della funzione GibbsSampling
-    - Analisi delle ricostruzioni tramite medie condizionate anziché tramite un singolo Gibbs Sampling
-    - Calcolare l'attivazione media delle hidden unit al variare delle epoche
-    - Togliere i commenti inutili 
-    - Introduzione target sparsity ?
-    - Come si calcola la pseudolikelihood?
-    - Introduzione Hamming distance ?
+    - Introdurre target sparsity?
+    - Calcolo della pseudolikelihood?
+
 
 """
 
@@ -44,7 +38,11 @@ from sklearn.model_selection import train_test_split
 from pudb import set_trace
 import seaborn as sns; sns.set(); sns.set_style("ticks")    
 
+
 ############### Initialization
+# Initialize numpy prints
+np.set_printoptions( precision = 2, suppress= True, linewidth = 1000) 
+    
 # Define hyper-parameters that will be often fixed
 # Type of RBM to be used (False = BaseRBM, True = ReLU)
 useReLU = True
@@ -58,12 +56,12 @@ if N <= 5:
     p_01 = 0.15
     p_10 = 0.05
 else:
-    if l == 1:
+    #if l == 1:
         p_01 = 0.1
         p_10 = 0.0025
-    else:
-        p_01 = 0.1
-        p_10 = 0.010
+    #else:
+        #p_01 = 0.1
+        #p_10 = 0.00
 
 
 # Learning algorithm
@@ -73,16 +71,16 @@ SGS = 1
 # Sampling period during the learning
 period = 50
 # Momentum coefficient
-alpha = 0
+alpha = 0.25
 # Epsilon decaying coefficient
-c_e = 1.0
+c_e = 0.975
 # Alpha growth coefficient
-c_a = 1.0 + 1.0/10
+c_a = 1.03
 # Percentage of the dataset that will form the training set
 ratioTrain = 0.5
 # Seed for the dataset and the machine
-seedTr = 0
-seedBM = 10
+seedTr = None
+seedBM = None
 # Number of repetitions
 if seedTr != None and seedBM != None:
     n = 1
@@ -167,10 +165,6 @@ dataset = buildDataset( N, l, seedTr, p_01, p_10 )
 # Use hold-out technique to avoid overfitting
 X_train, X_test = train_test_split( dataset, test_size=(1-ratioTrain), random_state = seedTr)
 
-print( dataset )
-np.save("debug", dataset)
-input()
-
 if plots:
     plt.matshow( X_train[:,1:] ) 
     plt.show() 
@@ -178,7 +172,7 @@ if plots:
 
 ###############  Learning phase 
 # Define a matrix to store the results
-fields = ['nC_last', 'nC_train','nC_test', 'MRE_last', 'MRE_train', 'MRE_test', 'p','T', 'L_mean', 'S_mean', 'm_tilde' ] 
+fields = ['nC_last', 'nC_train','nC_test','RE_last', 'RE_train', 'RE_test', 'Sparsity', 'Theta_mean', 'g_mean', 'L_mean', 'S_mean', 'm_tilde', 'm_mean', 'sqrt(r)', 'sqrt(r_mag)', 'Temp', 'W^2' ] 
 results = np.zeros( (n, len(fields)) )
 
 # Repeat the learning n times in order to obtain a more reliable statistics
@@ -204,11 +198,17 @@ for k in range( n ):
     def analyzePerfomance( X ):
         
         size = len(X)
+        
         L_arr = np.zeros( size )
         S_arr = np.zeros( size )
+        # Mean squared activations hidden units
+        r = np.zeros( size )
+        r_mag = np.zeros( size )
+
         # Magnetizations matrix 
         magnet = np.empty( (size, M) )
         m_t = np.empty( size )
+        
         
         # Describe the set according to the unique rows
         X_red, indices  = np.unique( X, axis = 0, return_inverse = True)
@@ -219,17 +219,12 @@ for k in range( n ):
         # Iterate through the set, but taking into account the repetitions
         k = 0  
         MRE  = 0
-        
-        ## DEBUG
-        #np.set_printoptions(precision=2 )#, threshold = 10)
-        #print( BM.W ) 
-        
+                
         for i in indices:
             
             # Obtain the reconstruction given by the machine
             BM.v, BM.h = BM.GibbsSampling( v_init = X_red[i], SGS = 1 )
             
-
             # Compute its distance from the real visible state
             dist = np.linalg.norm( X_red[i] - BM.v )**2
             if dist == 0:
@@ -241,20 +236,22 @@ for k in range( n ):
             
             # Compute the number of silent and active units
             L_arr[k], S_arr[k] = BM.analyzeHiddenState( a = 3 )
+            
             # Compute the magnetizations of the hidden units
             m_t[k], magnet[k] = BM.analyzeMagnetizations( X_red[i], L_arr[k] )
             
-            ## DEBUG
-            #print( X_red[i], "\t", BM.v )
-            #print( "Visible example", X_red[i, 1:] ) 
-            #print( "Hidden repr = ", BM.h[1:] )
-            #print( "Hidden biases =", BM.W.T[1:,0]  )
-            #print( "Hidden pre-act =", np.dot( BM.W.T[:,1:], X_red[i,1:] ) )
-            #print( "magnetizations = ", magnet[k] ) 
-            #print( "m^~ = ", m_t[k] )
-            #print( "m_avg = ", np.mean( magnet[k] ) )
-            #print( "L, S = ", L_arr[k], S_arr[k] )
-            #input()
+            # Sort the hidden state in ascending order
+            BM.h = np.sort( BM.h )
+            L = int( np.around( L_arr[k] ) )
+            
+            # Compute the mean squared activity of the two types of hidden units
+            r[k] += np.sum( np.power( BM.h[:-L], 2 ) )/(M-L)
+            if L > 0:
+                r_mag[k] += np.sum( np.power(BM.h[-L:],2) )/L
+            else:
+                # No magnetized h.u., hence r_magnetized = 0
+                pass
+            
             k += 1
             
         # Compute mean reconstruction error
@@ -262,40 +259,61 @@ for k in range( n ):
         # Compute percentage of correct reconstructions
         nCorrect = np.sum( corr )*1.0/size*100
         
+        # Compute mean r and r_mag
+        r = np.mean( r )
+        r_mag = np.mean( r_mag )
+        
         print( "Size set = ", size )
         print( "Correct reconstructions (%%) = %.2f " % nCorrect )
-        print( "MRE = ", MRE )
+        print( "MRE = {:.2f}".format( MRE ) )
         if MRE > 0:
-            print( "RE averaged only on errors = ", MRE*size/np.sum( wrong ) )
-        print( "L_avg = ", np.mean( L_arr ) )
-        print( "m^~ = ", np.mean( m_t ) )
-        print( "m_avg = ",  np.mean( magnet.flatten() )  )
-        
-        input()
-        
-        return MRE, nCorrect, L_arr, S_arr, corr, wrong, m_t, magnet
+            print( "RE averaged only on errors = {:.2f} ".format( MRE*size/np.sum( wrong ) ) )
+        print( "L_mean = {:.2f}".format( np.mean( L_arr ) ) )
+        print( "S_mean = {:.2f}".format( np.mean( S_arr ) ) )
+        print( "r^(1/2) = {:.2f} ".format( np.sqrt( np.mean( r ) ) ) )
+        print( "r_mag^(1/2) = {:.2f}".format( np.sqrt( np.mean( r_mag ) ) ) )
+        print( "m^~ = {:.2f}".format( np.mean( m_t ) ) )
+        print( "m_mean = {:.2f}".format(  np.mean( magnet.flatten() ) ) , "\n", )
+                
+        return MRE, nCorrect, L_arr, S_arr, m_t, magnet, r, r_mag, corr, wrong 
     
     # Perfomance on the last mini-batch of the training set 
-    print( "Last MB training set results:" )
-    MRE_last, nC_last, L_last, S_last, __, __, __, __ = analyzePerfomance( X_train[-sizeMB:] )
+    print( "=========== Last MB training set results ===========" )
+    MRE_last, nC_last, L_last, S_last ,__ ,__, __, __, __, wrong_last = analyzePerfomance( X_train[-sizeMB:] )
     # Perfomance on the training set 
-    print( "Training set results:" )
-    MRE_train, nC_train, L_train, S_train, corr_train, wrong_train, m_train, __  = analyzePerfomance( X_train )
+    print( "=========== Training set results ===========" )
+    MRE_train, nC_train, L_train, S_train, m_train, mag_train, r_train, r_m_train, corr_train, wrong_train  = analyzePerfomance( X_train )
     # Perfomance on the test set
-    print( "Test set results" )
-    MRE_test, nC_test, L_test, S_test, corr_test, wrong_test, m_test, __ = analyzePerfomance( X_test )
+    print( "=========== Test set results ===========" )
+    MRE_test, nC_test, L_test, S_test, m_test, mag_test, r_test, r_m_test, corr_test, wrong_test = analyzePerfomance( X_test )
 
-    # Concatenate the values of S and L, since they are independent on the type of set considered
+    input()
+    print( "Final weights" )
+    print( BM.W )
+    print( "Thresholds:", BM.W[0] )
+    print( "Max element of BM.W:", np.max( np.abs( BM.W.flatten() ) ) ) 
+    print( "Sparsity: ", p )
+    
+    # Concatenate the values that are independent on the type of set considered
     L = np.append( L_train, L_test )
     S = np.append( S_train, S_test )
     m_tilde = np.append( m_train, m_test )
+    mag = np.append( mag_train, mag_test ) 
+    r = np.append( r_train, r_test )
+    r_mag = np.append( r_m_train, r_m_test )
     
-    del L_train, L_test, S_train, S_test, m_train, m_test
+    # Compute the RE averaged only on the errors
+    RE_last = MRE_last*sizeMB/np.sum(wrong_last)
+    RE_train = MRE_train*len(X_train)/np.sum(wrong_train)
+    RE_test  = MRE_test*len(X_test)/np.sum(wrong_test)
+    del L_train, L_test, S_train, S_test, m_train, m_test, mag_test, mag_train, r_train, r_m_train, r_test, r_m_test
+
     ############### Save the numerical results                
     # Write numerical results for the comparison of test and training data
-    results[ k, : ] = np.array( [nC_last, nC_train, nC_test, MRE_last, MRE_train, MRE_test, \
-                      p,T, np.mean( L ), np.mean(S), np.mean( m_tilde ) ] )
-        
+    results[ k, : ] = np.array( [nC_last, nC_train, nC_test, RE_last, RE_train, RE_test, p, -np.mean( BM.W[0] ), -np.mean( BM.W[:,0] ),
+        np.mean( L ), np.mean(S), np.mean( m_tilde ), np.mean( mag.flatten() ), np.sqrt( np.mean(r) ), np.sqrt( np.mean(r_mag) ), T, np.linalg.norm( BM.W )**2 ] )
+    
+    
     ############### Make the plots
     # Define a function to make the histograms of the weights, if specified
     def plotWeights( weights ):
@@ -336,52 +354,76 @@ for k in range( n ):
         axarr[1].hist(S)
         axarr[1].set_ylabel("$\hat{S}$")
         plt.show()
-    
-    np.set_printoptions( precision = 2, suppress= True, linewidth = 1000) 
-    print( BM.W )
-    print( "Thresholds:", BM.W[0] )
-    print( "Max element of BM.W:", np.max( np.abs( BM.W.flatten() ) ) ) 
-    input()
+
+        input( "Continue?" )
 ######## File outputs    
 with open('results.csv', 'a') as csvfile:            
-    writer = csv.writer(csvfile, delimiter=' ')
+    writer = csv.writer(csvfile, quoting=csv.QUOTE_NONE)
     # Store hyperparameters
     writer.writerow( [ str(datetime.datetime.now()) ] )
-    writer.writerow( ['ReLU_RBM?', 'N ', 'M', 'LA'] )
-    writer.writerow( [useReLU, N, M, LA ])
-    writer.writerow( ['seedBM ', 'seedTr', 'sizeTot', 'p_01', 'p_10' ])
-    writer.writerow([seedBM,seedTr, len(dataset), p_01, p_10])
-    writer.writerow([ 'alpha', 'c_e', 'c_a', 'SGS', 'Period'])
-    writer.writerow([ alpha ,c_e, c_a, SGS, period])    
+    writer.writerow( ['ReLU_RBM', 'N', 'M', 'LA',  'SGS', 'sizeTot', 'p_01', 'p_10', 'alpha', 'c_e', 'c_a', 'Period', 'seedBM ', 'seedTr'] )
+    writer.writerow( [useReLU, N, M, LA, SGS, len(dataset), p_01, p_10,alpha ,c_e, c_a, period,seedTr,seedBM] )
     writer.writerow( ['nEpochs', 'epsilon', 'lambda_x', 'sizeTrain','nMB' ] )
     writer.writerow( [nEpochs, epsilon, lambda_x,sizeTrain, nMB ] )
+    writer.writerow( [])
     # Store results and statistics
     writer.writerow( fields )
-    writer.writerows(results)
-    writer.writerow(['Averages'])
-    writer.writerow(np.mean( results, axis=0 ) )
-    writer.writerow(['Standard deviations'])
-    writer.writerow(np.std(  results, axis=0 ) )
+    #for i in results:
+        #writer.writerow(['{:.3f}'.format(x) for x in i])
+    writer.writerows( results )
+    writer.writerow([ ])
+    tmp = np.mean( results, axis=0 )
+    tmp = np.vstack( (tmp, np.std(results,axis=0)) )
+    writer.writerows( tmp )
     writer.writerow([])
 
 ### Save the statistics of the dataset in a csv file, together with the perfomance of the last RBM      
 # Create a string representation to get an overview of the statistics of the created sets    
-def writePerformance( X, Y, corr, wrong, name ):
-    X_red = np.unique( X, axis = 0 )
-    Y_red = np.unique( Y, axis = 0 )
-    X_str = [ np.array2string( X_red[i].astype(int),separator='-',max_line_width=10000 ) for i in range(len(X_red) ) ]  
-    Y_str = [ np.array2string( Y_red[i].astype(int),separator='-',max_line_width=10000 ) for i in range(len(Y_red) ) ]  
-    
-    with open('dataset.csv', 'a') as csvfile:            
-        writer = csv.writer(csvfile)
-        writer.writerow( [name,'', 'Size=', np.sum( corr) + np.sum( wrong )] )
-        writer.writerow( ["Example", "Unique?", "Right", "Wrong", "Total"] )
-        for i in range( len(X_str) ):
-            if X_str[i] in Y_str:
-                uniqueness = False
-            else:
-                uniqueness = True
-            writer.writerow( [ X_str[i], uniqueness,  corr[i], wrong[i], corr[i]+wrong[i]  ] )
+def formatVectors( Z ):
+    if Z.dtype == np.dtype('int64'):
+        # Convert vectors into strings
+        Z_str = [ np.array2string( Z[i],separator="",max_line_width=10000 ) for i in range(len(Z) ) ]  
+        # Substitute zeros with underscore for representation purposes
+        Z_str = [ Z_str[i].replace("0","_") for i in range(len(Z_str))] 
+    else:
+        # Convert vectors into strings
+        Z_str = [ np.array2string( Z[i],separator="",max_line_width=10000, formatter={'all':lambda x: str(int(np.around(x)))+'|' if x > 0 else '_|'} ) for i in range(len(Z) ) ]  
+    return Z_str
 
-writePerformance( X_train, X_test, corr_train, wrong_train, 'Training_set' )
-writePerformance( X_test, X_train, corr_test, wrong_test, 'Test_set' )
+
+# Remove repetitions in the two sets
+X_red  = np.unique( X_train, axis = 0 )
+Y_red  = np.unique( X_test, axis = 0 )
+X_rec, X_h = BM.GibbsSampling( v_init = X_red )
+Y_rec, Y_h = BM.GibbsSampling( v_init = Y_red )
+
+# Convert visible states into strings
+X_red_str = formatVectors( X_red.astype(int) )
+Y_red_str = formatVectors( Y_red.astype(int) )
+# Convert reconstructions into string
+X_rec_str = formatVectors( X_rec.astype(int) )
+Y_rec_str = formatVectors( Y_rec.astype(int) )
+X_h_str = formatVectors( X_h[:,1:] )
+Y_h_str = formatVectors( Y_h[:,1:] )
+
+with open('dataset.csv', 'w') as csvfile:            
+    writer = csv.writer(csvfile)
+    writer.writerow( ['Training_set'] )
+    writer.writerow([ 'Size=' + str( np.sum( corr_train) + np.sum( wrong_train ) )] )
+    writer.writerow( ["Example", "Sample", "Hidden_state", "Unique?", "Total", "Right", "Wrong"] )
+    for i in range( len(X_red_str) ):
+        if X_red_str[i] in Y_red_str:
+            uniqueness = False
+        else:
+            uniqueness = True
+        writer.writerow( [ X_red_str[i], X_rec_str[i], X_h_str[i], uniqueness,corr_train[i]+wrong_train[i],  corr_train[i], wrong_train[i]  ] )
+
+    writer.writerow( ['Test_set'] )
+    writer.writerow([ 'Size=' + str( np.sum( corr_test) + np.sum( wrong_test ) )] )
+    writer.writerow( ["Example", "Sample", "Hidden_state", "Unique?", "Total", "Right", "Wrong"] )
+    for i in range( len(Y_red_str) ):
+        if Y_red_str[i] in X_red_str:
+            uniqueness = False
+        else:
+            uniqueness = True
+        writer.writerow( [ Y_red_str[i], Y_rec_str[i], Y_h_str[i], uniqueness, corr_test[i]+wrong_test[i],  corr_test[i], wrong_test[i]  ] )
