@@ -2,18 +2,13 @@
 Script to make the machine run
 
 To-do list:
-    - Salvare self.h in dataset.csv
     - Analisi delle ricostruzioni tramite medie condizionate anziché tramite un singolo Gibbs Sampling
-
     - Determinazione della fase della macchina e comparazione con le performance di ricostruzione
 
-    - Reintrodurre alpha e vedere come varia la perfomance
     - Confrontare la macchina regolarizzata con quella di default
     - Controllare se la sparsità controlla \tilde{m}. Ripetere dopo aver cambiato dataset
     - Confrontare PCD, CD-1 e CD-10
 
-    - Riguardare tutto il codice e togliere i commenti inutili
-    - Modificare le chiamate in maniera tale da definire parameters
     - Implementare una grid evaluation per la scelta degli iperparametri
     - Velocizzare ulteriormente gli update usando Theano?
     - Unificare le funzioni per le due RBM e introdurre useReLU?
@@ -24,10 +19,9 @@ To-do list:
     - Introdurre target sparsity?
     - Calcolo della pseudolikelihood?
 
-
 """
 
-from RBM_matrix import BaseRBM, ReLU_RBM
+from RBM import BaseRBM, ReLU_RBM
 import datetime
 import csv
 from collections import Counter
