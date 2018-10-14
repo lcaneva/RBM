@@ -2,29 +2,29 @@
 Script to make the machine run
 
 To-do list:
+    - Ottimizzare il calcolo del numero di ricostruzioni corrette
+    - Utilizzare reconstructionScore() e definire una funzione per stampare i vettori?
     - Analisi delle ricostruzioni tramite medie condizionate anziché tramite un singolo Gibbs Sampling
-    - Determinazione della fase della macchina e comparazione con le performance di ricostruzione
 
+    - Determinazione della fase della macchina e comparazione con le performance di ricostruzione
+    - Reintrodurre alpha e vedere come varia la perfomance
     - Confrontare la macchina regolarizzata con quella di default
     - Controllare se la sparsità controlla \tilde{m}. Ripetere dopo aver cambiato dataset
     - Confrontare PCD, CD-1 e CD-10
 
+    - Modificare le chiamate in maniera tale da definire parameters
     - Implementare una grid evaluation per la scelta degli iperparametri
     - Velocizzare ulteriormente gli update usando Theano?
     - Unificare le funzioni per le due RBM e introdurre useReLU?
-    - Spostare i grafici fit() fuori, se possibile
-    - Cambiare i segni di g_i e \theta_{\mu} (solo nella rappresentazione?); si potrebbe introdurre una reference W_t e una W
-      della matrice estesa o non
-    - Cambiare il nome della funzione GibbsSampling
     - Introdurre target sparsity?
     - Calcolo della pseudolikelihood?
-
+    
 """
 
 from RBM import BaseRBM, ReLU_RBM
 import datetime
 import csv
-from collections import Counter
+import struct 
 import numpy as np
 import argparse
 import matplotlib.pyplot as plt
@@ -38,30 +38,36 @@ import seaborn as sns; sns.set(); sns.set_style("ticks")
 np.set_printoptions( precision = 2, suppress= True, linewidth = 1000) 
     
 # Define hyper-parameters that will be often fixed
+# Dataset to be used
+useMNIST = False
+
 # Type of RBM to be used (False = BaseRBM, True = ReLU)
 useReLU = True
-# Size of the machine
-N = 40
-M = 20
-# Length of the categories
-l = 2
-# Probabilities for noisy clamping
-if N <= 5:
-    p_01 = 0.15
-    p_10 = 0.05
+
+if useMNIST:
+    # Size of the machine    
+    N = 784
+    M = 400
 else:
-    #if l == 1:
+    # Size of the machine    
+    N = 40
+    M = 20
+    # Length of the categories
+    l = 10
+    # Probabilities for noisy clamping
+    if N <= 5:
+        p_01 = 0.15
+        p_10 = 0.05
+    else:
         p_01 = 0.1
         p_10 = 0.0025
-    #else:
-        #p_01 = 0.1
-        #p_10 = 0.00
 
 
 # Learning algorithm
 LA = "CD"
 # Steps Gibbs Sampling 
 SGS = 1
+SGS_rec = 1
 # Sampling period during the learning
 period = 50
 # Momentum coefficient
@@ -69,12 +75,12 @@ alpha = 0.25
 # Epsilon decaying coefficient
 c_e = 0.975
 # Alpha growth coefficient
-c_a = 1.03
+c_a = 1.005
 # Percentage of the dataset that will form the training set
 ratioTrain = 0.5
 # Seed for the dataset and the machine
-seedTr = None
-seedBM = None
+seedTr = 0
+seedBM = 10
 # Number of repetitions
 if seedTr != None and seedBM != None:
     n = 1
@@ -132,11 +138,11 @@ def buildDataset( N, l, seedTr, p_01, p_10 ):
     # Obtain the dataset, applying noisy clamping
     dataset = np.zeros( (sizeTot,N), dtype = float )            
     maxIter = int( np.ceil( sizeTot/ l_X ) ) 
+    ind = 0
     for i in range( maxIter ):
         # Take a random permutation of the rows of the X matrix
         for j in np.random.permutation( l_X ):
-        #for j in range( l_X ):
-            if (i*l_X + j) >=sizeTot: continue
+            if ind >=sizeTot: break
         
             x = np.copy( X[ j ] )
 
@@ -146,22 +152,34 @@ def buildDataset( N, l, seedTr, p_01, p_10 ):
                 if x[k] == 1 and y[k] <= p_01: x[k] = 0
                 elif x[k] == 0 and y[k] <= p_10: x[k] = 1
  
-            dataset[i*l_X+j] =  x            
-
-    # Add a dimension to handle biases
-    dataset = np.insert( dataset, 0, 1, axis = 1)
+            dataset[ind] =  x
+            ind += 1
     
     return dataset
 
+if useMNIST: 
+    with open("train-images-idx3-ubyte", "rb") as fin:
+        # Read first 16 bytes
+        magic, num, rows, cols = struct.unpack(">IIII", fin.read(16))
+        # Read pixels intensities
+        img = np.fromfile(fin, dtype=np.uint8).reshape(num, rows, cols)
+        
+        dataset = np.zeros( (num, rows*cols), dtype = int ) 
+        for i in range( num ):
+            dataset[ i ] = img[ i, :, :].flatten() >= 128
+            
+        dataset = dataset[0:int(1.0/ratioTrain*sizeTrain)]
+else:
+    dataset = buildDataset( N, l, seedTr, p_01, p_10 )
+    if plots:
+        plt.matshow( dataset ) 
+        plt.show() 
 
-dataset = buildDataset( N, l, seedTr, p_01, p_10 )
+# Add a dimension to handle biases
+dataset = np.insert( dataset, 0, 1, axis = 1)
 
 # Use hold-out technique to avoid overfitting
 X_train, X_test = train_test_split( dataset, test_size=(1-ratioTrain), random_state = seedTr)
-
-if plots:
-    plt.matshow( X_train[:,1:] ) 
-    plt.show() 
 
 
 ###############  Learning phase 
@@ -180,16 +198,14 @@ for k in range( n ):
 
     W_init = np.copy(BM.W)
     
-    # Iterate through the mini-batches
-    for i in range( nMB ):
-        print("***************Learning {}-th MB***************\n".format(i+1))
-        BM.fit( X_train[i*sizeMB:(i+1)*sizeMB], X_test, LA, SGS, epsilon, alpha, lambda_x, nEpochs, c_e, c_a, period, plots )
-
+    ############### Learn the data model
+    BM.fit( X_train, X_test, LA, SGS, nMB, nEpochs, epsilon, alpha, lambda_x, c_e, c_a, period, plots )
+        
     ############### Analyze the final weights 
     p, p_vec, T = BM.analyzeWeights()
         
     ############### Analyze the perfomance of the RBM
-    def analyzePerfomance( X ):
+    def analyzePerfomance( X, SGS = SGS_rec ):
         
         size = len(X)
         
@@ -217,8 +233,9 @@ for k in range( n ):
         for i in indices:
             
             # Obtain the reconstruction given by the machine
-            BM.v, BM.h = BM.GibbsSampling( v_init = X_red[i], SGS = 1 )
+            BM.v, BM.h = BM.GibbsSampling( v_init = X_red[i], SGS = SGS )
             
+
             # Compute its distance from the real visible state
             dist = np.linalg.norm( X_red[i] - BM.v )**2
             if dist == 0:
@@ -274,6 +291,7 @@ for k in range( n ):
     # Perfomance on the last mini-batch of the training set 
     print( "=========== Last MB training set results ===========" )
     MRE_last, nC_last, L_last, S_last ,__ ,__, __, __, __, wrong_last = analyzePerfomance( X_train[-sizeMB:] )
+
     # Perfomance on the training set 
     print( "=========== Training set results ===========" )
     MRE_train, nC_train, L_train, S_train, m_train, mag_train, r_train, r_m_train, corr_train, wrong_train  = analyzePerfomance( X_train )
@@ -350,6 +368,8 @@ for k in range( n ):
         plt.show()
 
         input( "Continue?" )
+        
+        
 ######## File outputs    
 with open('results.csv', 'a') as csvfile:            
     writer = csv.writer(csvfile, quoting=csv.QUOTE_NONE)
