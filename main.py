@@ -38,30 +38,31 @@ import seaborn as sns; sns.set(); sns.set_style("ticks")
 np.set_printoptions( precision = 2, suppress= True, linewidth = 1000) 
     
 # Define hyper-parameters that will be often fixed
-# Dataset to be used
-useMNIST = False
-
 # Type of RBM to be used (False = BaseRBM, True = ReLU)
 useReLU = True
 
+# Size of the machine    
+N = 40
+M = 10
+
+# Length of the categories
+l = 5
+# Probabilities for noisy clamping
+if N <= 5:
+    p_01 = 0.15
+    p_10 = 0.05
+elif N <= 20:
+    p_01 = 0.15
+    p_10 = 0.02
+else:
+    p_01 = 0.1
+    p_10 = 0.0025
+
+# Dataset to be used
+useMNIST = False
 if useMNIST:
-    # Size of the machine    
     N = 784
     M = 400
-else:
-    # Size of the machine    
-    N = 40
-    M = 20
-    # Length of the categories
-    l = 10
-    # Probabilities for noisy clamping
-    if N <= 5:
-        p_01 = 0.15
-        p_10 = 0.05
-    else:
-        p_01 = 0.1
-        p_10 = 0.0025
-
 
 # Learning algorithm
 LA = "CD"
@@ -71,16 +72,16 @@ SGS_rec = 1
 # Sampling period during the learning
 period = 50
 # Momentum coefficient
-alpha = 0.25
+alpha = 0.2
 # Epsilon decaying coefficient
-c_e = 0.975
+c_e = 0.99
 # Alpha growth coefficient
 c_a = 1.005
 # Percentage of the dataset that will form the training set
-ratioTrain = 0.5
+ratioTest = 1.
 # Seed for the dataset and the machine
 seedTr = 0
-seedBM = 10
+seedBM = None
 # Number of repetitions
 if seedTr != None and seedBM != None:
     n = 1
@@ -133,12 +134,13 @@ def buildDataset( N, l, seedTr, p_01, p_10 ):
         X[i, i*l:(i+1)*l] = np.ones( l ) 
 
     # Compute the size of the dataset
-    sizeTot = int( np.ceil( 1/ratioTrain*sizeTrain ) )
+    sizeTot = int( np.ceil( (1.0+ratioTest)*sizeTrain ) )
     
     # Obtain the dataset, applying noisy clamping
     dataset = np.zeros( (sizeTot,N), dtype = float )            
     maxIter = int( np.ceil( sizeTot/ l_X ) ) 
     ind = 0
+    count_z = 0
     for i in range( maxIter ):
         # Take a random permutation of the rows of the X matrix
         for j in np.random.permutation( l_X ):
@@ -151,10 +153,14 @@ def buildDataset( N, l, seedTr, p_01, p_10 ):
             for k in range( N ):
                 if x[k] == 1 and y[k] <= p_01: x[k] = 0
                 elif x[k] == 0 and y[k] <= p_10: x[k] = 1
- 
+
             dataset[ind] =  x
             ind += 1
+            
+            if np.array_equal( x, np.zeros( N )):
+                count_z += 1 
     
+    print( count_z )
     return dataset
 
 if useMNIST: 
@@ -168,19 +174,19 @@ if useMNIST:
         for i in range( num ):
             dataset[ i ] = img[ i, :, :].flatten() >= 128
             
-        dataset = dataset[0:int(1.0/ratioTrain*sizeTrain)]
+        dataset = dataset[0:int( (1+ratioTest)*sizeTrain)]
 else:
     dataset = buildDataset( N, l, seedTr, p_01, p_10 )
-    if plots:
-        plt.matshow( dataset ) 
-        plt.show() 
+    #if plots:
+        #plt.matshow( dataset[0:50] )
+        #plt.xticks([]); plt.yticks([]) 
+        #plt.show() 
 
 # Add a dimension to handle biases
 dataset = np.insert( dataset, 0, 1, axis = 1)
 
 # Use hold-out technique to avoid overfitting
-X_train, X_test = train_test_split( dataset, test_size=(1-ratioTrain), random_state = seedTr)
-
+X_train, X_test = train_test_split( dataset, test_size=ratioTest/(1.+ratioTest), random_state = seedTr)
 
 ###############  Learning phase 
 # Define a matrix to store the results
@@ -219,56 +225,47 @@ for k in range( n ):
         magnet = np.empty( (size, M) )
         m_t = np.empty( size )
         
+        # Obtain the reconstruction score
+        MRE, nCorrect = BM.reconstructionScore( X )
         
         # Describe the set according to the unique rows
         X_red, indices  = np.unique( X, axis = 0, return_inverse = True)
+        
         # Arrays to store the errors and right reconstructions
         corr = np.zeros( len(X_red) )
         wrong = np.zeros( len(X_red) )
         
-        # Iterate through the set, but taking into account the repetitions
-        k = 0  
-        MRE  = 0
-                
-        for i in indices:
+        # Iterate through the set, but taking into account the repetitions        
+        for k,ind in enumerate(indices):
             
-            # Obtain the reconstruction given by the machine
-            BM.v, BM.h = BM.GibbsSampling( v_init = X_red[i], SGS = SGS )
-            
-
             # Compute its distance from the real visible state
-            dist = np.linalg.norm( X_red[i] - BM.v )**2
+            dist = np.linalg.norm( X_red[ind] - BM.v[k] )
             if dist == 0:
-                corr[i] += 1 
+                corr[ind] += 1 
             else:
-                wrong[i] += 1 
-
-            MRE += dist
+                wrong[ind] += 1 
             
             # Compute the number of silent and active units
-            L_arr[k], S_arr[k] = BM.analyzeHiddenState( a = 3 )
+            L_arr[k], S_arr[k] = BM.analyzeHiddenState( BM.h[k], a = 3 )
             
             # Compute the magnetizations of the hidden units
-            m_t[k], magnet[k] = BM.analyzeMagnetizations( X_red[i], L_arr[k] )
+            m_t[k], magnet[k] = BM.analyzeMagnetizations( X_red[ind], L_arr[k] )
             
             # Sort the hidden state in ascending order
-            BM.h = np.sort( BM.h )
+            BM.h[k] = np.sort( BM.h[k] )
             L = int( np.around( L_arr[k] ) )
             
             # Compute the mean squared activity of the two types of hidden units
-            r[k] += np.sum( np.power( BM.h[:-L], 2 ) )/(M-L)
-            if L > 0:
-                r_mag[k] += np.sum( np.power(BM.h[-L:],2) )/L
-            else:
+            if L != BM.M and L > 0:
+                r[k] = np.sum( np.power( BM.h[k, :-L], 2 ) )/(M-L)
+                r_mag[k] = np.sum( np.power(BM.h[k,-L:],2) )/L
+            elif L == 0:
                 # No magnetized h.u., hence r_magnetized = 0
-                pass
-            
-            k += 1
-            
-        # Compute mean reconstruction error
-        MRE /= size
-        # Compute percentage of correct reconstructions
-        nCorrect = np.sum( corr )*1.0/size*100
+                r_mag[k] = 0
+            elif L == BM.M:
+                # No non-magnetized h.u.
+                r[k] = 0
+
         
         # Compute mean r and r_mag
         r = np.mean( r )
@@ -299,13 +296,17 @@ for k in range( n ):
     print( "=========== Test set results ===========" )
     MRE_test, nC_test, L_test, S_test, m_test, mag_test, r_test, r_m_test, corr_test, wrong_test = analyzePerfomance( X_test )
 
-    input()
-    print( "Final weights" )
-    print( BM.W )
-    print( "Thresholds:", BM.W[0] )
-    print( "Max element of BM.W:", np.max( np.abs( BM.W.flatten() ) ) ) 
-    print( "Sparsity: ", p )
+    print( "*********** Final weights ***********" )
+    W_0, W = np.copy( W_init), np.copy( BM.W )
+    W_0[0,:], W[0,:] = -W_0[0,:], -W[0,:]
+    W_0[:,0], W[:,0] = -W_0[:,0], -W[:,0]
+
     
+    print( W[:5,:] )
+    print( "\nThresholds:", W[0] )
+    print( "Max element of BM.W:", np.max( np.abs( W.flatten() ) ) ) 
+    print( "Sparsity: ", p )
+
     # Concatenate the values that are independent on the type of set considered
     L = np.append( L_train, L_test )
     S = np.append( S_train, S_test )
@@ -328,46 +329,67 @@ for k in range( n ):
     
     ############### Make the plots
     # Define a function to make the histograms of the weights, if specified
-    def plotWeights( weights ):
-        f, axarr = plt.subplots(3)
+    def plotWeights( W_0, W ):
+        f, axarr = plt.subplots(3,2)
         f.suptitle('Histograms of weights and biases')
-        axarr[0].hist( weights[0,:], bins ="auto" )
-        axarr[0].set_ylabel( "Visible biases" )
-        axarr[1].hist( weights[:,0], bins ="auto" )
-        axarr[1].set_ylabel( "Hidden biases" )
-        axarr[2].hist( weights[1:,1:].flatten(), bins ="auto" )
-        axarr[2].set_ylabel( "Weights" )
+        axarr[0,0].hist( W_0[0,:], bins ="auto" )
+        axarr[0,0].set_ylabel( "Hidden biases" )
+        axarr[1,0].hist( W_0[:,0], bins ="auto" )
+        axarr[1,0].set_ylabel( "Visible biases" )
+        axarr[2,0].hist( W_0[1:,1:].flatten(), bins ="auto" )
+        axarr[2,0].set_ylabel( "Weights" )
+
+        plt.subplots_adjust(hspace=0.5, wspace= 0.5)
+        
+        axarr[0,1].hist( W[0,:], bins ="auto" )
+        axarr[1,1].hist( W[:,0], bins ="auto" )
+        axarr[2,1].hist( W[1:,1:].flatten(), bins ="auto" )
+        
+        plt.savefig('histograms_part.png')
+        
+
+        f, axarr = plt.subplots(1, 2)
+        f.suptitle('Histograms of the weights')
+        axarr[0].hist( W_0.flatten(), bins= "auto" )
+        axarr[1].hist( W.flatten(), bins= "auto" )
+
+        plt.savefig('histograms.png')
+
+        #f,(ax1,ax2) = plt.subplots(1,2,sharey=True)
+        #g1 = sns.heatmap(W_0[1:,1:],cmap="coolwarm",cbar=False,ax=ax1, xticklabels=False, yticklabels=False)
+        #g1.set_title('Initial weights')
+        #g2 = sns.heatmap(W[1:,1:],cmap="coolwarm",cbar=False,ax=ax2, xticklabels=False, yticklabels=False)
+        #g2.set_title('Final weights')
+        #plt.subplots_adjust(wspace=0.5)
+        #plt.savefig('colormaps.png')
+        f, axarr = plt.subplots( M,1, sharex=True )
+        for i in range( M ):
+            axarr[i].imshow( np.around( W[:,i].reshape(1,N+1) ), cmap ="coolwarm" )
+            axarr[i].set_yticks([]);axarr[i].set_xticks([])
+            axarr[i].set_ylabel(i)
+            axarr[i].set_adjustable('box-forced')
+
         plt.subplots_adjust(hspace=0.5)
         
-        f, axarr = plt.subplots(1, 2 )#, figsize=(9, 3))
-        f.suptitle('Histograms of weights and colormap')
-        axarr[0].hist( weights.flatten(), bins= "auto" )
-        axarr[1] = sns.heatmap( weights,  cmap="Greys_r", linewidths=.5, square=True)#, xticklabels = xticks, yticklabels = yticks)
-        axarr[1].set_xlabel("Hidden units")
-        axarr[1].set_ylabel("Visible units")
-        axarr[1].spines['bottom'].set_visible(True)
-        axarr[1].spines['top'].set_visible(True)
-        axarr[1].spines['left'].set_visible('black')
-        axarr[1].spines['right'].set_visible('black')
-        axarr[1].set_aspect("equal")
-        plt.subplots_adjust(wspace=0.5)
-        plt.show() 
+        
+        
+        plt.show()
 
-    if plots:
+    if plots:        
         # Compare the initial and final weights
-        plotWeights( W_init ) 
-        plotWeights( BM.W ) 
+        plotWeights( W_0, W ) 
 
         # Make the histograms of L and S
-        f, axarr = plt.subplots(2, sharex=True)
+        f, axarr = plt.subplots(2)
         axarr[0].hist(L)
         axarr[0].set_title("Hidden activities")
         axarr[0].set_ylabel("$\hat{L}$")
+        plt.subplots_adjust(hspace=0.5)
         axarr[1].hist(S)
         axarr[1].set_ylabel("$\hat{S}$")
         plt.show()
 
-        input( "Continue?" )
+    input( "Continue?" )
         
         
 ######## File outputs    
@@ -382,12 +404,12 @@ with open('results.csv', 'a') as csvfile:
     writer.writerow( [])
     # Store results and statistics
     writer.writerow( fields )
-    #for i in results:
-        #writer.writerow(['{:.3f}'.format(x) for x in i])
     writer.writerows( results )
     writer.writerow([ ])
-    tmp = np.mean( results, axis=0 )
-    tmp = np.vstack( (tmp, np.std(results,axis=0)) )
+    tmp = np.vstack( (np.mean( results, axis=0 ), np.std(results,axis=0)) )
+    tmp = np.hstack( ([[nEpochs, epsilon, lambda_x ],[0,0,0]], tmp) ) 
+    fields_final = ['nEpochs', 'epsilon', 'lambda_x',] + fields  
+    writer.writerow( fields_final )
     writer.writerows( tmp )
     writer.writerow([])
 

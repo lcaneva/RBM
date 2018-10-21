@@ -55,7 +55,7 @@ class BaseRBM:
                 w_{0,\mu} = activation threshold of the \mu-th hidden unit = g_\mu (if gaussian)
             The configurations will need a starting "1" to take account of these biases
             during the propagation of the signal between the layers.
-            Notice that g_i is -\theta_i in the notation of Ackley. 
+            Notice that g_i is -\theta_i in the notation of Ackley and also g_{\mu} = -\theta{mu}. 
             Finally, the proper weights are initialized using He's method based on uniform distribution
             while the biases are set to null values.
             """            
@@ -106,10 +106,14 @@ class BaseRBM:
         ovf = np.zeros( (4,  int(nEpochs/period_ovf)), dtype = float )
         
         velocity = np.zeros( (self.N+1, self.M+1) )        
+        # DEBUG
+        W_up = np.zeros( (nEpochs,3*self.M), dtype=float )
+        W_hist = np.zeros( (nEpochs,3*self.M), dtype=float ) 
         
         # Iterate through X_train nEpochs times
         for t in range( nEpochs ):
-            for ind in range( nMB ):
+            for ind in np.random.permutation( nMB ):
+                    
                 # Create a view of the i-th mini-batch
                 MB = X_train[ind*sizeMB:(ind+1)*sizeMB]
                 
@@ -123,53 +127,38 @@ class BaseRBM:
                     
                 # Compute the regularization contribution
                 W_updates -=  epsilon/sizeMB * lambda_x * self.regularize( x=2 )  
-                
-                
-                ## Iterate through X_train
-                for i in range( sizeMB ):
-                    # Compute reconstruction error
-                    sq_dist = np.linalg.norm( MB[i] - v_rec[i] )**2 
-                    MRE[t] += sq_dist            
-                    # Check if it is the correct reconstruction
-                    if sq_dist == 0:
-                        nCorrect[t] += 1
-                
+                                
                 # Update the velocity
                 velocity =  W_updates + alpha*velocity
                 
                 # Update the weights (one time per MB)
                 self.W += velocity
-
                 
+
             # Compute the energies and the sparsity of the model
             if plots:
                 if t % period_ovf == 0:
                     ovf[:, counter] = self.monitorOverfitting( X_train, X_test )
                     p_arr[counter], __, T = self.analyzeWeights() 
                     counter += 1
+                
+                W_up[t,:] = W_updates[ 1:4, 1:].flatten()
+                W_hist[t,:] = self.W[ 1:4, 1: ].flatten()
 
-            # Compute statistics for the current epoch
-            MRE[t] /= len( X_train ) 
-            nCorrect[t] *= 100.0/len(X_train)
-            
-            # Print statistics of the current epoch
-            print("---------------Epoch {}--------------".format(t))
+
+            # Compute and print statistics of the current epoch
+            print("---------------Epoch {}--------------".format(t+1))
+            MRE[t], nCorrect[t] = self.reconstructionScore( X_train )            
+
             print( "Mean Squared Error = ", MRE[t] )
             print( "Correct reconstructions (%%) = %.2f \n" % nCorrect[t] ) 
             
-            if self.N < 100:
-                np.set_printoptions( linewidth = 1000, formatter={'all':lambda x: str(x) if x > 0 else '_'} )
-                for i in range( 5 ):
-                    print( MB[i].astype(int) )
-                    print( v_rec[i].astype(int), "\t{:.2f}".format( np.linalg.norm(MB[i] - v_rec[i])**2), "\n"  )
-                np.set_printoptions()
-
             # Increase alpha and decrease epsilon towards the end of learning
             if t > nEpochs*0.5:
-                if epsilon > 1e-5:
-                    epsilon *= c_e 
-                if alpha < 0.9:
+                epsilon *= c_e 
+            if t > nEpochs*0.5 and alpha < 0.9:
                     alpha *= c_a
+
 
         # Make plots for the current mini-batch, if required
         if plots:
@@ -199,6 +188,16 @@ class BaseRBM:
             axarr[1].set_xlabel('Epochs')
             axarr[1].legend()
             plt.show()
+            
+            plt.figure()
+            for j in range( W_hist.shape[1] ):
+                plt.plot( [i for i in range( nEpochs )], W_hist[:,j] )
+
+            plt.figure()
+            for j in range( W_hist.shape[1] ):
+                plt.plot( [i for i in range( nEpochs )], W_up[:,j] )
+                
+            plt.show()    
 
     """
     Regularization function.
@@ -368,7 +367,7 @@ class BaseRBM:
                 y = np.random.rand( vp.shape[0], self.N+1 )
                 v = np.zeros_like( vp ) 
                 v[  y <= vp ] = 1
-        
+
         if mode == "Total":
             return vp, v
         else:
@@ -424,16 +423,27 @@ class BaseRBM:
             PR = 0
         return PR
     
-    def reconstructionScore( self, X, y = None ):
-            # Obtain the reconstruction given by the machine
-            self.v, self.h = BM.GibbsSampling( v_init = X, SGS = 1 )
-
-            # Compute its distance from the real visible state
-            for x in X:
-                dist = np.linalg.norm( X[i] - self.v[i] )**2
-                MRE += dist
+    def reconstructionScore( self, X, SGS = 1 ):
+            # Obtain the reconstructions given by the machine
+            self.v, self.h = self.GibbsSampling( v_init = X, SGS = SGS )
             
-            return MRE/len(X)
+            # Compute their distance from the real visible states
+            dist = np.linalg.norm( X-self.v, axis = 1 )
+            MRE = np.sum( np.power( dist, 2 ) )
+            nCorrect = np.sum( dist == 0 )
+
+            # Print a small subset of the results
+            if self.N < 100:
+                np.set_printoptions( linewidth = 1000, formatter={'all':lambda x: str(x) if x > 0 else '_'} )
+                indices = np.random.randint( len(X), size=5 ) 
+                for i in indices:
+                    print( X[i,1:].astype(int) )
+                    print( self.v[i,1:].astype(int), \
+                          "\t{:.2f}".format( np.linalg.norm(X[i] - self.v[i])**2), "\n"  )
+                np.set_printoptions()
+
+            
+            return MRE/len(X), nCorrect*100/len(X)
     
     
     """
@@ -472,14 +482,14 @@ class BaseRBM:
     that shows that in this case \hat{L} converges to the true L, if all magnetizations are equal
     and in the thermodynamic limit.    
     """    
-    def analyzeHiddenState( self, a = 3 ):
+    def analyzeHiddenState( self, h, a = 3 ):
         
         # Partecipation ratio to get the number of (strongly, in the ReLU case) activated h.u.
         # Since the bias unit is always active (and it's not ReLU), it isn't considered
-        L = self.__PR( self.h[1:], a ) 
+        L = self.__PR( h[1:], a ) 
 
         # Number of silent units
-        S = np.sum( self.h[1:] == 0 )
+        S = np.sum( h[1:] == 0 )
     
         return L, S
 
@@ -542,31 +552,39 @@ class ReLU_RBM( BaseRBM ):
     Create a MCMC either from a visible or a hidden state that makes the machine  daydream for SGS steps.
     """
     def GibbsSampling( self, v_init = np.empty(0), h_init = np.empty(0), SGS = 1 ):
-        if v_init.size > 0:
-            # Use the probabilities in the intermediate steps to reduce noise sampling
-            h_samples = self.updateHidden( v_init )
-            vp, v = self.updateVisible( h_samples )
-            
-            for k in range( SGS-2 ):
-                # Complete Gibbs Sampling starting from a visible state
+        if SGS == 1:
+            # Check if the chain should start from a visible state
+            if v_init.size > 0:
+                h_samples = self.updateHidden( v_init )
+                vp, v_samples = self.updateVisible( h_samples )
+            else:
+                vp,v_samples = self.updateVisible( h_init )
                 h_samples = self.updateHidden( vp )
-                vp, v = self.updateVisible( h_samples )
-            
-            h_samples = self.updateHidden( vp )
-            vp, v_samples = self.updateVisible( h_samples )
         else:
-            # Use the probabilities in the intermediate steps to reduce noise sampling
-            vp = self.updateVisible( h_init, mode = "Pr" )
-            h_samples = self.updateHidden( vp )
-            
-            for k in range( SGS-2 ):
-                # Complete Gibbs Sampling starting from a hidden state
-                vp = self.updateVisible( h_samples, mode="Pr" )
+            # Check if the chain should start from a visible state
+            if v_init.size > 0:
+                # Use the probabilities in the intermediate steps to reduce noise sampling
+                h_samples = self.updateHidden( v_init )
+                vp, v = self.updateVisible( h_samples )
+                
+                for k in range( SGS-2 ):
+                    h_samples = self.updateHidden( vp )
+                    vp, v = self.updateVisible( h_samples )
+                
                 h_samples = self.updateHidden( vp )
-            
-            vp, v_samples = self.updateVisible( h_samples )
-            h_samples = self.updateHidden( vp )
-            
+                vp, v_samples = self.updateVisible( h_samples )
+            else:
+                # Use the probabilities in the intermediate steps to reduce noise sampling
+                vp,v = self.updateVisible( h_init )
+                h_samples = self.updateHidden( vp )
+                
+                for k in range( SGS-2 ):
+                    vp = self.updateVisible( h_samples, mode="Pr" )
+                    h_samples = self.updateHidden( vp )
+                
+                vp, v_samples = self.updateVisible( h_samples )
+                h_samples = self.updateHidden( vp )
+                
         return v_samples, h_samples
     
     def __freeEnergy( self, v, beta = 1, W_ext = np.empty(0) ):
@@ -597,7 +615,7 @@ class ReLU_RBM( BaseRBM ):
             x = x + np.random.randn( self.M + 1 )
         else:
             x = x + np.random.randn( x.shape[0], self.M+1 )
-
+        
         # Determine which hidden units are not active
         x[x<0] = 0
         
@@ -644,10 +662,14 @@ class ReLU_RBM( BaseRBM ):
         # Get the new hidden state
         self.h = self.updateHidden( v_example ) 
         
+        #DEBUG
+        h_pos = self.h 
+        net_pos = np.dot( v_example, self.W )
+        
         # Compute positive contribute for SGD
         # Get a matrix in R^{ N+1, M+1 } 
         delta_pos = np.dot( v_example.T, self.h )
-
+        
         # Negative phase
         # Make the machine daydream, starting from the hidden state
         # obtained in the positive phase
@@ -660,11 +682,12 @@ class ReLU_RBM( BaseRBM ):
         self.vp, self.v = super().updateVisible( self.h, mode = "Total" )
         # Obtain the correspondent hidden state
         self.h = self.updateHidden( self.vp  )
-    
+
         # Compute negative contribute for SGD
         # Obtain a matrix in R^{ N+1, M+1 }
-        delta_neg = np.dot( self.v.T, self.h )
- 
+        delta_neg = np.dot( self.vp.T, self.h )
+        
+
         # Update the weights (and biases) 
         return  (delta_pos - delta_neg )
 
