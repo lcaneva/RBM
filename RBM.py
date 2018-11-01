@@ -1,8 +1,5 @@
 import numpy as np
-import matplotlib.pyplot as plt
-from pudb import set_trace
 from scipy import special
-import seaborn as sns
 
 ##################################################
 # Class for Restricted Boltzmann Machines
@@ -22,7 +19,7 @@ class BaseRBM:
     and M+1 hidden units. If instantiated as a child class, do not define the
     probabilities vectors used instead during the learning of BaseRBM.    
     """
-    def __init__(self, N, M, seed = None):
+    def __init__(self, N, M, seed = None, p=np.empty(0)):
             # Initialize the random state, if required
             np.random.seed(seed)
             
@@ -67,9 +64,12 @@ class BaseRBM:
             
             # Biases initialization
             self.W[0,:] = 0
-            self.W[:,0] = 0 
-            
-            
+            for i in range(1,len(p)):
+                if p[i] > 0:
+                    self.W[i,0] = np.log( p[i]/(1.-p[i]) ) 
+                else:
+                    self.W[i,0] = 0
+                
     """
     Learning algorithm.
     -------------------
@@ -95,28 +95,28 @@ class BaseRBM:
         # Initialize counter for the energies and sampling period
         counter = 0
         period_ovf = 10
-        
+                
         # Size of the input mini-batch
         sizeMB = int( len( X_train )/nMB )
-
+        
         # Initialize arrays for the statistics
         MRE = np.zeros( nEpochs, dtype = float )
         nCorrect = np.zeros( nEpochs, dtype = float )
         p_arr = np.zeros( int(nEpochs/period_ovf), dtype = float )        
-        ovf = np.zeros( (4,  int(nEpochs/period_ovf)), dtype = float )
+        ovf = np.zeros( (2,  int(nEpochs/period_ovf)), dtype = float )
         
         velocity = np.zeros( (self.N+1, self.M+1) )        
-        # DEBUG
-        W_up = np.zeros( (nEpochs,3*self.M), dtype=float )
-        W_hist = np.zeros( (nEpochs,3*self.M), dtype=float ) 
         
         # Iterate through X_train nEpochs times
         for t in range( nEpochs ):
             for ind in np.random.permutation( nMB ):
-                    
-                # Create a view of the i-th mini-batch
-                MB = X_train[ind*sizeMB:(ind+1)*sizeMB]
-                
+                if ind < nMB-1:
+                    # Create a view of the i-th mini-batch
+                    MB = X_train[ind*sizeMB:(ind+1)*sizeMB]
+                else:
+                    # Make a bigger mini-batch if len(X_train)%nMB != 0 
+                    MB = X_train[ind*sizeMB:]
+
                 # Compute the contribution to the weight updates deriving from the log-likelihood (heuristically) 
                 if LA == 'CD':
                     W_updates = epsilon/sizeMB * self.CD( MB, SGS )
@@ -136,20 +136,15 @@ class BaseRBM:
                 
 
             # Compute the energies and the sparsity of the model
-            if plots:
-                if t % period_ovf == 0:
+            if plots and (t % period_ovf == 0):
                     ovf[:, counter] = self.monitorOverfitting( X_train, X_test )
                     p_arr[counter], __, T = self.analyzeWeights() 
                     counter += 1
-                
-                W_up[t,:] = W_updates[ 1:4, 1:].flatten()
-                W_hist[t,:] = self.W[ 1:4, 1: ].flatten()
-
 
             # Compute and print statistics of the current epoch
             print("---------------Epoch {}--------------".format(t+1))
             MRE[t], nCorrect[t] = self.reconstructionScore( X_train )            
-
+                
             print( "Mean Squared Error = ", MRE[t] )
             print( "Correct reconstructions (%%) = %.2f \n" % nCorrect[t] ) 
             
@@ -160,44 +155,8 @@ class BaseRBM:
                     alpha *= c_a
 
 
-        # Make plots for the current mini-batch, if required
-        if plots:
-            # Display what has been learned            
-            f, axarr = plt.subplots(2, sharex=True)
-            axarr[0].plot([i for i in range( nEpochs )], MRE)
-            axarr[0].set_ylabel('MRE')
-            axarr[1].plot([i for i in range( nEpochs )], nCorrect)
-            axarr[1].set_ylabel('Correct %')
-            axarr[1].set_xlabel('Epochs')
-
-            # Monitor the sparsity
-            plt.figure()
-            plt.plot([period_ovf*i for i in range( len( p_arr ) )], p_arr )
-            plt.ylabel('Sparsity')
-            plt.xlabel('Epochs')
-
-            # Monitor the overfitting
-            f, axarr = plt.subplots(2, sharex=True)
-            axarr[0].plot([period_ovf*i for i in range( len( ovf[0] ) )], ovf[0,:], label="Training set" )
-            axarr[0].plot([period_ovf*i for i in range( len( ovf[1] ) )], ovf[1,:], label="Test set" )
-            axarr[0].set_ylabel('Average log-likelihood')
-            axarr[0].legend()
-            axarr[1].plot([period_ovf*i for i in range( len( ovf[2] ) )], ovf[2,:], label="Training set" )
-            axarr[1].plot([period_ovf*i for i in range( len( ovf[3] ) )], ovf[3,:], label="Test set" )
-            axarr[1].set_ylabel('Average free energy')
-            axarr[1].set_xlabel('Epochs')
-            axarr[1].legend()
-            plt.show()
-            
-            plt.figure()
-            for j in range( W_hist.shape[1] ):
-                plt.plot( [i for i in range( nEpochs )], W_hist[:,j] )
-
-            plt.figure()
-            for j in range( W_hist.shape[1] ):
-                plt.plot( [i for i in range( nEpochs )], W_up[:,j] )
-                
-            plt.show()    
+        return MRE, nCorrect, p_arr, ovf, period_ovf
+        
 
     """
     Regularization function.
@@ -212,15 +171,13 @@ class BaseRBM:
     """
     def regularize( self, x ):
         # Determine the signs of the weights
-        W_updates = np.zeros_like( self.W )
+        W_updates = np.zeros( (self.N+1, self.M+1) )
         W_updates[1:,1:] = np.sign( self.W[1:,1:] )
-        # Iterate through the hidden units (excluding the bias one, as suggested by Hinton)
-        for mu in range( 1, self.M+1 ):
-            # Compute the contribution between square brackets, different for each h.u.
-            tmp = np.sum( np.abs( self.W[1:,mu] ) )**(x-1)
-            # Compute the correspondent column of the weights updates
-            W_updates[1:,mu] *= tmp 
         
+        W_abs = np.abs( self.W )
+        coeffs = np.power( np.sum( W_abs[1:, 1:], axis = 0 ), x-1 )
+        W_updates[1:,1:] = np.multiply( W_updates[1:,1:], coeffs )
+
         return W_updates
     
     """
@@ -275,30 +232,40 @@ class BaseRBM:
     Create a MCMC either from a visible or a hidden state that makes the machine  daydream for SGS steps.
     """
     def GibbsSampling( self, v_init = np.empty(0), h_init = np.empty(0), SGS = 1 ):
-        # Determine where the chain starts
-        if v_init.size > 0:
-            hp, h = self.updateHidden( v_init, mode = "Total" )
-            vp = self.updateVisible( h, mode = "Pr" )
-            
-            for k in range( SGS-2 ):
-                # Complete Gibbs Sampling starting from a visible state
-                hp,h = self.updateHidden( vp )
-                vp = self.updateVisible( h, mode = "Pr" )
-            
-            hp, h_samples = self.updateHidden( vp )
-            vp, v_samples = self.updateVisible( h_samples )
+        if SGS == 1:
+            # Check if the chain should start from a visible state
+            if v_init.size > 0:
+                hp, h_samples = self.updateHidden( v_init )
+                vp, v_samples = self.updateVisible( h_samples )
+            else:
+                vp,v_samples = self.updateVisible( h_init )
+                hp, h_samples = self.updateHidden( vp )
         else:
-            vp = self.updateVisible( h_init, mode = "Pr" )
-            hp, h = self.updateHidden( vp, mode="Total" )
-
-            for k in range( SGS-2 ):
-                # Complete Gibbs Sampling starting from a hidden state
-                vp = self.updateVisible( h, mode="Pr" )
-                hp, h = self.updateHidden( vp )
-            
-            vp, v_samples = self.updateVisible( h )
-            hp, h_samples = self.updateHidden( vp )
-
+            # Check if the chain should start from a visible state
+            if v_init.size > 0:
+                # Use the probabilities in the intermediate steps to reduce noise sampling
+                hp, h = self.updateHidden( v_init  )
+                vp = self.updateVisible( h, mode="Total" )
+                
+                for k in range( SGS-2 ):
+                    hp = self.updateHidden( vp )
+                    vp = self.updateVisible( h, mode = "Pr" )
+                
+                hp, h_samples = self.updateHidden( vp )
+                vp, v_samples = self.updateVisible( h_samples )
+            else:
+                # Use the probabilities in the intermediate steps to reduce noise sampling
+                vp = self.updateVisible( h_init, mode = "Pr" )
+                hp, h = self.updateHidden( vp, mode="Total" )
+                
+                for k in range( SGS-2 ):
+                    # Complete Gibbs Sampling starting from a hidden state
+                    vp = self.updateVisible( h, mode="Pr" )
+                    hp, h = self.updateHidden( vp )
+                
+                vp, v_samples = self.updateVisible( h )
+                hp, h_samples = self.updateHidden( vp )
+               
         return v_samples, h_samples
     
     """
@@ -402,9 +369,7 @@ class BaseRBM:
     def monitorOverfitting( self, X_train, X_test):            
         avg_train = self.__freeEnergy( X_train )/len(X_train)
         avg_test =  self.__freeEnergy( X_test )/len(X_test)
-        label = 'Average free energy'        
-        logl = 0
-        return avg_train, avg_test, label
+        return avg_train, avg_test
 
     """
     Compute the partecipation ratio PR_a
@@ -416,7 +381,7 @@ class BaseRBM:
     If x has K nonzero and equal components, then PR = K for any a.    
     """
     def __PR( self, x, a ):
-        if any( x != 0 ):        
+        if any( x != 0 ):  
             PR = np.sum( np.power( np.abs(x), a ) )**2
             PR /=  np.sum( np.power( np.abs(x), 2*a ) )
         else:
@@ -431,17 +396,6 @@ class BaseRBM:
             dist = np.linalg.norm( X-self.v, axis = 1 )
             MRE = np.sum( np.power( dist, 2 ) )
             nCorrect = np.sum( dist == 0 )
-
-            # Print a small subset of the results
-            if self.N < 100:
-                np.set_printoptions( linewidth = 1000, formatter={'all':lambda x: str(x) if x > 0 else '_'} )
-                indices = np.random.randint( len(X), size=5 ) 
-                for i in indices:
-                    print( X[i,1:].astype(int) )
-                    print( self.v[i,1:].astype(int), \
-                          "\t{:.2f}".format( np.linalg.norm(X[i] - self.v[i])**2), "\n"  )
-                np.set_printoptions()
-
             
             return MRE/len(X), nCorrect*100/len(X)
     
@@ -491,7 +445,25 @@ class BaseRBM:
         # Number of silent units
         S = np.sum( h[1:] == 0 )
     
-        return L, S
+        # Sort the hidden state in ascending order
+        h_ord = np.sort( h[1:] )
+        L_approx = int( np.around( L ) )
+        S_approx = int( np.around( S ) )
+            
+        # Compute the mean squared activity of the two types of hidden units
+        if L_approx != self.M and L_approx > 0:
+            r = np.sum( np.power( h_ord[ :-L_approx], 2 ) )/(self.M-L_approx)
+            h_nonmag_max =  h_ord[-L_approx-1]
+        elif L_approx == 0:
+            h_nonmag_max = h_ord[-1]
+            r = np.sum( np.power( h_ord, 2 ) )/self.M
+        elif L_approx == self.M:
+            r = 0
+            h_nonmag_max = 0
+        
+        h_max = h_ord[-1]
+    
+        return L, S, r, h_max, h_nonmag_max
 
 
     """
@@ -524,11 +496,16 @@ class BaseRBM:
                 m_sorted = m[ind] 
             else:
                 m_sorted= np.sort( m )
-            m_t = 1.0/L * np.sum( m_sorted[-L:] )
+            m_tilde = 1.0/L * np.sum( m_sorted[-L:] )
+            if L != self.M:
+                m_nonmag = 1.0/(self.M-L) * np.sum( m_sorted[:self.M-L] )
+            else:
+                m_nonmag = 0        
         else:
-            m_t = 0
+            m_tilde = 0
+            m_nonmag = 1.0/self.M * np.sum( m )
             
-        return m_t, m
+        return m_tilde, m_nonmag
 
 
 ##################################################
@@ -536,8 +513,8 @@ class BaseRBM:
 # with rectified linear hidden units
 ##################################################
 class ReLU_RBM( BaseRBM ):
-    def __init__( self, N, M, seed ):
-        super().__init__( N,M,seed )
+    def __init__( self, N, M, seed, p=np.empty(0) ):
+        super().__init__( N,M,seed, p )
         del self.hp
 
 
@@ -612,9 +589,9 @@ class ReLU_RBM( BaseRBM ):
         # to all preactivations of the hidden units 
         # given in input
         if x.ndim == 1:
-            x = x + np.random.randn( self.M + 1 )
+            x +=  np.random.randn( self.M + 1 )
         else:
-            x = x + np.random.randn( x.shape[0], self.M+1 )
+            x +=  np.random.randn( x.shape[0], self.M+1 )
         
         # Determine which hidden units are not active
         x[x<0] = 0
@@ -661,11 +638,7 @@ class ReLU_RBM( BaseRBM ):
         # Positive phase 
         # Get the new hidden state
         self.h = self.updateHidden( v_example ) 
-        
-        #DEBUG
-        h_pos = self.h 
-        net_pos = np.dot( v_example, self.W )
-        
+                
         # Compute positive contribute for SGD
         # Get a matrix in R^{ N+1, M+1 } 
         delta_pos = np.dot( v_example.T, self.h )
@@ -685,11 +658,11 @@ class ReLU_RBM( BaseRBM ):
 
         # Compute negative contribute for SGD
         # Obtain a matrix in R^{ N+1, M+1 }
-        delta_neg = np.dot( self.vp.T, self.h )
+        delta_neg = np.dot( self.v.T, self.h )
         
 
         # Update the weights (and biases) 
-        return  (delta_pos - delta_neg )
+        return  delta_pos - delta_neg 
 
     """
     Persistent Contrastive Divergence.
@@ -828,16 +801,17 @@ class ReLU_RBM( BaseRBM ):
     def monitorOverfitting( self, X_train, X_test):            
         
         log_pstar = 0
-        Z_approx = self.AIS( K=10, n_tot = 1 )
+        #Z_approx = self.AIS( K=10, n_tot = 1 )
+        #avg_train = log_pstar/len(X_train)  - np.log(Z_approx)
+
         for x in X_train:
             log_pstar -=  self.__freeEnergy( x )  
-        avg_train = log_pstar/len(X_train)  - np.log(Z_approx)
-        avg_train_2 = -log_pstar/len(X_train)
+        avg_train = -log_pstar/len(X_train)
         
         log_pstar = 0
         for x in X_test:
             log_pstar -=  self.__freeEnergy( x )  
-        avg_test = log_pstar/len(X_test)  - np.log(Z_approx)
-        avg_test_2 = -log_pstar/len(X_test)
+        avg_test = -log_pstar/len(X_test)
 
-        return avg_train, avg_test, avg_train_2, avg_test_2
+        #return avg_train, avg_test, avg_train_2, avg_test_2
+        return avg_train, avg_test
