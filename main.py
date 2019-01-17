@@ -42,6 +42,11 @@ np.set_printoptions( precision = 2, suppress= True, linewidth = 1000)
 # Store all hyperparameters in a dictionary
 pars = pms.getParameters()
 
+# Print a recap of the selected hyperparameters
+print( "========== Chosen parameters ==========" )
+print( pars )
+input( "Continue?" )
+
 
 # Compute the size of the minibatches
 sizeMB = int( pars['sizeTrain']/ pars['nMB'] )
@@ -54,7 +59,7 @@ if pars['useMNIST']:
         dataset = dataset[0:int( (1+pars['ratioTest'])*pars['sizeTrain'])]
 else:
     dataset, count_e = dt.buildDataset( pars['N'], pars['l'], pars['sizeTrain'], pars['ratioTest'],\
-                                        pars['seedTr'], pars['p_01'], pars['p_10'] )
+                                        pars['seedTr'], pars['p_01'], pars['p_10'], pars['invert'] )
 
 # Add a dimension to handle biases
 dataset = np.insert( dataset, 0, 1, axis = 1)
@@ -89,8 +94,14 @@ for k in range( pars['nRuns'] ):
     fit_res = [MRE_fit, nCorrect_fit, sparsity_fit, ovf[0,:], ovf[1,:] ]
     
     ############### Analyze the final weights
+    print( "========== Final weights ==========" )    
+
     analyzer = Analyzer( BM.N, BM.M )
-    p, p_vec, T = analyzer.analyzeWeights( BM.W )
+    p, p_vis, p_hid, T = analyzer.analyzeWeights( BM.W )    
+    print( "Thresholds:", BM.W[0] )
+    print( "Max element of BM.W: {:.2f}".format(  np.max( np.abs( BM.W.flatten() ) ) ) )
+    print( "Sparsity: {:.2f}".format( p ) )
+    input()
         
     ############### Analyze the perfomance of the RBM
     
@@ -103,12 +114,10 @@ for k in range( pars['nRuns'] ):
     # Perfomance on the test set
     print( "=========== Test set results ===========" )
     res_test = analyzer.analyzePerfomance( X_test, BM )
-
-    print( "*********** Final weights ***********" )    
-    print( "Thresholds:", BM.W[0] )
-    print( "Max element of BM.W: {:.2f}".format( np.max( np.abs( BM.W.flatten() ) ) ) ) 
-    print( "Sparsity: {:.2f}".format( p ) )
-
+    
+    # Analyze overlap hidden configurations related to the test set 
+    q = analyzer.analyzeOverlap( X_test, m=500 )
+    
     # Concatenate the values that are independent on the type of set considered
     L =  np.append( res_train[3], res_test[3] ) 
     S =  np.append( res_train[4], res_test[4] )
@@ -130,7 +139,7 @@ for k in range( pars['nRuns'] ):
 
     ############### Make plots    
     if pars['plots'] and k == 0:       
-        analyzer.makePlots( pars, X_test, fit_res, L, S, BM ) 
+        analyzer.makePlots( pars, X_test, fit_res, L, S, q, BM ) 
         pars['plots'] = False
         
     input( "Continue?" )

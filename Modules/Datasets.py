@@ -24,7 +24,7 @@ Function to build the dataset for the autoencoder.
 ----------------------------------------------------
 Define the dataset of "environmental vectors", using the noisy clamping as specified in the article of Ackley et al. 
 """
-def buildDataset( N, l, sizeTrain, ratioTest, seedTr, p_01, p_10 ):
+def buildDataset( N, l, sizeTrain, ratioTest, seedTr, p_01, p_10, invert ):
     
     # If seed is not None, fix the dataset
     np.random.seed( seedTr )
@@ -66,6 +66,12 @@ def buildDataset( N, l, sizeTrain, ratioTest, seedTr, p_01, p_10 ):
             ind += 1
             
     print( "Number of errors: {}   {:.2f} %".format( count_e, count_e/len(dataset)*100 ) )
+    if invert:
+        dataset_2 = np.copy( dataset )
+        dataset_2[dataset == 0] = 1
+        dataset_2[dataset == 1] = 0
+        dataset = dataset_2 
+        
     return dataset, count_e
 
 

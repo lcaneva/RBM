@@ -65,21 +65,33 @@ class Analyzer:
     layer,  the self-threshold, i.e. the link with the bias unit, is discarded.
     """
     def analyzeWeights( self, W ):
-        # Compute average sparsity
+        ## Compute average sparsity
         p = 0
         for mu in range( 1, self.M +1 ):
             p += self.__PR( W[1:, mu], 2 )
         p /= (self.M * self.N )
+        
+        p_2 = 1.0/(self.M*self.N)*self.__PR( W[1:,1:].flatten(), 2 )
+        p_3 = np.sum( np.abs(W[1:,1:]) > 0.1 )/(self.M*self.N)
+
+        print( p, p_2 )
+        print( p_3 )
+
         # Determine weight heterogeneities
-        p_vector = np.zeros( self.N ) 
+        p_vis = np.zeros( self.N ) 
         # Compute normalization
-        den = 1.0/self.M * np.linalg.norm( W[1:,1:], 'fro')**2
+        den = 1.0/self.N * np.linalg.norm( W[1:,1:], 'fro')**2
         for i in range( self.N ):
-                p_vector[i] = 1.0/den * np.linalg.norm( W[i+1, 1:] )**2
+                p_vis[i] = 1.0/den * np.linalg.norm( W[i+1, 1:] )**2
+        
+        p_hid = np.zeros( self.M )
+        for mu in range( self.M ):
+                p_hid[mu] = 1.0/den * np.linalg.norm( W[1:, mu+1] )**2
+        
         # Compute the effective temperature of the machine
         T = p/den
         
-        return p, p_vector, T
+        return p, p_vis, p_hid, T
         
     """
     Compute the number of magnetized and silent hidden units.
@@ -179,8 +191,36 @@ class Analyzer:
             
         return m_tilde, m_nmg
 
+    
+    """
+    Compute the overlap between the different hidden states.
+    -------------------------------------------------------------------
+    Input: 
+        h, hidden configurations to analyze
+        m, size of the set of configurations to analyze
+    """
+    def analyzeOverlap( self, h, m ):
+        # Select the configurations in h according to m
+        H = h[:m,1:]
 
+        # Compute the unnormalized overlap matrix
+        tmp = np.dot( H, H.T )
 
+        # Compute the norm of each configuration
+        norms = np.linalg.norm( H, axis = 1 ) 
+
+        # Normalize the overlap matrix
+        q = np.divide( tmp, np.outer( norms, norms ) )
+        
+        # DEBUG
+        #q_2 = np.zeros_like(q)
+        #for i in range( len( H ) ):
+            #for j in range( i, len( H ) ):
+                #q_2[i,j] = np.dot( H[i], H[j] )/(np.linalg.norm( H[i] )*np.linalg.norm( H[j] ) )
+                #q_2[j,i] = q_2[i,j]
+        
+        return q
+        
     """
     Post-processing analysis function.
     -------------------------------------
@@ -229,6 +269,7 @@ class Analyzer:
             
             # Compute the magnetizations of the hidden units
             m_t[k], m_nmg[k] = self.analyzeMagnetizations( X_red[ind], L_arr[k], BM.W )
+            
             
         # Print the 10-top reconstructions (arbitrarily chosen as the first occurrence of such examples)  
         if BM.N < 100:
@@ -289,7 +330,7 @@ class Analyzer:
     Function to make the different plots necessary for the analysis.
     -----------------------------------------------------------------
     """
-    def makePlots( self, pams, X_test, fit_res, L, S, BM ):
+    def makePlots( self, pams, X_test, fit_res, L, S,q, BM ):
         import matplotlib.pyplot as plt
         import matplotlib.colors as mcl
         import matplotlib.cm as cm
@@ -445,6 +486,14 @@ class Analyzer:
                     $\lambda={}$)'.format(BM.N,BM.M,pams['epsilon'],pams['lambda_x']), wrap=True, ha='center', va='top',fontsize=8 )
         
         plt.savefig( os.path.join(self.curr_dir, 'Plots', 'hidden_activities.png' ) )
+        
+        # Overlap between test hidden configurations, without self-overlap
+        plt.figure()
+        mask = np.ones(q.shape, dtype=bool)
+        np.fill_diagonal(mask, 0)
+        plt.hist( q[mask].flatten(), bins='auto' )
+        plt.title('Hidden states overlap')
+        plt.savefig( os.path.join(self.curr_dir, 'Plots', 'overlap.png' ) )
         plt.show()
 
     """

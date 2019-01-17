@@ -10,7 +10,7 @@ def getParameters():
 
     # Define hyper-parameters that will be often fixed
     # Type of RBM to be used (False = BaseRBM, True = ReLU)
-    pars['useReLU'] = False
+    pars['useReLU'] = True
 
     # Dataset to be used
     pars['useMNIST'] = False
@@ -20,11 +20,11 @@ def getParameters():
         pars['M'] = 400
     else:
         # Size of the machine    
-        pars['N'] = 8
-        pars['M'] = 3
+        pars['N'] = 40
+        pars['M'] = 20
 
         # Length of the categories
-        pars['l'] = 4
+        pars['l'] = 10
         # Probabilities for noisy clamping
         if pars['N'] <= 5:
             pars['p_01'] = 0.15
@@ -40,8 +40,11 @@ def getParameters():
                 pars['p_01'] = 0.01
                 pars['p_10'] = 0.005
 
+        pars['invert'] = True
+
+
     # Learning algorithm
-    pars['LA'] = "PCD"
+    pars['LA'] = "CD"
 
     # Steps Gibbs Sampling 
     pars['SGS'] = 1
@@ -56,7 +59,7 @@ def getParameters():
     pars['x'] = 3
 
     # Epsilon decaying coefficient
-    pars['c_e'] = 1.
+    pars['c_e'] = 0.975
 
     # Alpha growth coefficient
     pars['c_a'] = 1.01
@@ -69,7 +72,7 @@ def getParameters():
     pars['seedBM'] = 10
 
     # Reduce noise sampling in Gibbs Sampling
-    pars['useProb'] = False
+    pars['useProb'] = True
 
     # Number of repetitions
     if pars['seedTr'] != None and pars['seedTr'] != None:
@@ -98,5 +101,6 @@ def getParameters():
     pars['epsilon'] = float(args["epsilon"])
     pars['lambda_x'] = float(args["lambda"])
     pars['plots'] = (args["plots"] != "0")
+
 
     return pars

@@ -135,7 +135,11 @@ class AbstractRBM(ABC):
 
                 # Update the velocity
                 velocity =  W_updates + alpha*velocity
-                
+                #if t == 28:
+                #print( W_updates )
+                #print( self.regularize(x) )
+                #input()
+
                 #Update the weights (one time per MB)
                 self.W += velocity
  
@@ -150,7 +154,7 @@ class AbstractRBM(ABC):
             if plots and (t % period_ovf == 0):
                 # Compute the energies and the sparsity of the model
                 ovf[:, counter] = self.monitorOverfitting( X_train[:len_val], X_val )
-                p_arr[counter], __, T = analyzer.analyzeWeights( self.W ) 
+                p_arr[counter], __, __, T = analyzer.analyzeWeights( self.W ) 
                 counter += 1
 
             # DEBUG
@@ -182,11 +186,12 @@ class AbstractRBM(ABC):
         # Determine the signs of the weights
         W_updates = np.zeros( (self.N+1, self.M+1) )
         W_updates[1:,1:] = np.sign( self.W[1:,1:] )
-        
-        W_abs = np.abs( self.W )
-        coeffs = np.power( np.sum( W_abs[1:, 1:], axis = 0 ), x-1 )
-        W_updates[1:,1:] = np.multiply( W_updates[1:,1:], coeffs )
 
+        
+        # Use the weights to calibrate the update (one for each hidden unit)
+        coeffs = np.power( np.sum( np.abs( self.W[1:, 1:] ), axis = 0 ), x-1 )
+        W_updates[1:,1:] = np.multiply( W_updates[1:,1:], coeffs )
+                
         return W_updates
     
     """
@@ -319,17 +324,17 @@ class AbstractRBM(ABC):
     """
     def monitorOverfitting( self, X_train, X_test):            
         ## Average free energies
-        #avg_train = self.freeEnergy( X_train, self.W )/len(X_train)
-        #avg_test =  self.freeEnergy( X_test,  self.W )/len(X_test)
+        avg_train = self.freeEnergy( X_train, self.W )/len(X_train)
+        avg_test =  self.freeEnergy( X_test,  self.W )/len(X_test)
         
         # Approximated log-likelihod
-        p = np.mean( X_train, axis = 0 )
-        Z_approx = self.AIS_2( K=10000, n_tot = 100, p=p[1:] )
-        Z_exact = self.partition()
-        print( Z_approx, Z_exact )
-        input()
-        avg_train = -self.freeEnergy( X_train, self.W )/len(X_train) - np.log(Z_approx)
-        avg_test =  -self.freeEnergy( X_test,  self.W )/len(X_test) - np.log(Z_approx)
+        #p = np.mean( X_train, axis = 0 )
+        #Z_approx = self.AIS_2( K=10000, n_tot = 100, p=p[1:] )
+        #Z_exact = self.partition()
+        #print( Z_approx, Z_exact )
+        #input()
+        #avg_train = -self.freeEnergy( X_train, self.W )/len(X_train) - np.log(Z_approx)
+        #avg_test =  -self.freeEnergy( X_test,  self.W )/len(X_test) - np.log(Z_approx)
         
         ## DEBUG
         #print( avg_train )
