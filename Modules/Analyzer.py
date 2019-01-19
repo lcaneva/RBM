@@ -2,7 +2,7 @@ import numpy as np
 import datetime
 import csv
 import os
-        
+import pandas as pd        
 
 
 ##################################################
@@ -72,10 +72,6 @@ class Analyzer:
         p /= (self.M * self.N )
         
         p_2 = 1.0/(self.M*self.N)*self.__PR( W[1:,1:].flatten(), 2 )
-        p_3 = np.sum( np.abs(W[1:,1:]) > 0.1 )/(self.M*self.N)
-
-        print( p, p_2 )
-        print( p_3 )
 
         # Determine weight heterogeneities
         p_vis = np.zeros( self.N ) 
@@ -91,7 +87,7 @@ class Analyzer:
         # Compute the effective temperature of the machine
         T = p/den
         
-        return p, p_vis, p_hid, T
+        return p, p_2, p_vis, p_hid, T
         
     """
     Compute the number of magnetized and silent hidden units.
@@ -156,12 +152,10 @@ class Analyzer:
         # Cast the experimental value of L as an integer
         L = int( np.around( L ) )     
         
-        # Create a vector for the "local" magnetizations
-        # (one for each hidden unit)
-        m = np.zeros( self.M  )
-        for mu in range( self.M ):
-            m[mu] = 2*np.dot( x[1:], W[1:, mu+1] ) - np.dot( np.ones(self.N), W[1:, mu+1] )
-            m[mu] /= np.sum( np.abs( W[1:,mu+1] ) )
+        # Compute the  vector of the "local" magnetizations        
+        m = np.dot( W.T[1:,1:], 2*x[1:]-np.ones( self.N ) )
+        den = np.sum( np.abs( W[1:,1:] ), axis = 0 )
+        m = np.divide( m, den ) 
         
         # Compute \tilde{m}        
         if L > 0:
@@ -212,70 +206,102 @@ class Analyzer:
         # Normalize the overlap matrix
         q = np.divide( tmp, np.outer( norms, norms ) )
         
-        # DEBUG
-        #q_2 = np.zeros_like(q)
-        #for i in range( len( H ) ):
-            #for j in range( i, len( H ) ):
-                #q_2[i,j] = np.dot( H[i], H[j] )/(np.linalg.norm( H[i] )*np.linalg.norm( H[j] ) )
-                #q_2[j,i] = q_2[i,j]
-        
         return q
+       
+       
+       
+    """
+    Analyze the performance of the BM.
+    ---------------------------------------
+    Compute the reconstruction score (mean reconstruction
+    error and percentage of correct reconstructions)
+    through standard Gibbs Sampling or through Monasson's
+    formulas for the conditional average of a reconstruction
+    given an initial state.
+    Input:
+        X, set of examples
+        BM, Restricted Boltzmann Machine
+        cond_avg, bool to activate the search for local maxima
+            of the free energy
+    """
+    def analyzePerformance( self, X,  BM, cond_avg = False ):
+        if not cond_avg:
+            BM.GibbsSampling( X )
+            v_rec = BM.v
+        else:
+            v_rec = BM.findMaxima( X )
+
+        return BM.reconstructionScore( X, v_rec )
         
     """
     Post-processing analysis function.
     -------------------------------------
     """
-    def analyzePerfomance( self, X, BM ):
-        # Define size of the input set X
+    def analyzeStates( self, X, BM, cond = False, overlap = False ):
+        ######### Initializations
+        # Get the size of the input set
         size = len(X)
 
-        # Partecipation ratios
-        L_arr = np.zeros( size )
-        S_arr = np.zeros( size )
-
-        # Mean squared activations hidden units
-        r = np.zeros( size )
-        h_max = np.zeros( size )
-        h_nmg_max = np.zeros( size )
-
-        # Magnetizations matrix 
-        m_nmg = np.empty( size )
-        m_t = np.empty( size )
-        
-        # Obtain the reconstruction score
-        MRE, nCorrect = BM.reconstructionScore( X )
-                
         # Describe the set according to the unique rows
-        # ind_red = indices of the first occurrences of the unique rows
-        # indices = indices that allow to reconstruct X from the unique rows
-        X_red,  ind_red, indices  = np.unique( X, axis = 0, return_inverse = True, return_index=True)
+        #   ind_red: indices of the first occurrences of the unique rows
+        #   indices: indices that allow to reconstruct X from the unique rows
+        X_red,  ind_red, indices  = np.unique( X, axis = 0, return_inverse = True, return_index=True)        
         
-        # Arrays to store the errors and right reconstructions
-        corr = np.zeros( len(X_red) )
-        wrong = np.zeros( len(X_red) )
+        # Initialize a dictionary to store the results
+        # together with 2 numpy arrays to store the series
+        # 5 categories of measurements:
+        #   - MRE, REE, nCorr    performance measures
+        #   - L, S               partecipation ratios of hidden states 
+        #                        (L = magnetized, S = silent)
+        #   - m_t, m_nmg         magnetizations
+        #   - r, h_max, h_nmg    activations of hidden units measures
+        #   - corr, wrong        countings of reconstructions errors
+        perf = { 'nC': 0, 'MRE': 0, 'REE': 0, 'MRE_cond': None, 'nC_cond': None }
+        data =      np.zeros((size, 7))
+        counts =    np.zeros((len(X_red), 2))
         
-        # Iterate through the set, but taking into account the repetitions        
+
+        ####### Reconstruction score
+        if cond:
+            perf['MRE_cond'],perf['nC_cond'] = self.analyzePerformance( X,BM, cond_avg = True )
+        
+        perf['MRE'], perf['nC'] = self.analyzePerformance( X, BM )
+        
+        ####### Other measures
+        # Iterate through the entire set, but exploiting the repetitions for estimating corr and wrong        
         for k,ind in enumerate(indices):
             
             # Compute its distance from the real visible state
             dist = np.linalg.norm( X_red[ind] - BM.v[k] )
             if dist == 0:
-                corr[ind] += 1 
+                counts[ind,0] += 1 
             else:
-                wrong[ind] += 1 
+                counts[ind,1] += 1 
             
-            # Compute the number of silent and active units
-            L_arr[k], S_arr[k], r[k], h_max[k], h_nmg_max[k] = self.analyzeHiddenState( BM.h[k], a = 3 )
-            
+            # Compute the number of silent and active units, and estimate their activations
+            data[k,:5] = self.analyzeHiddenState( BM.h[k], a = 3 )
+ 
             # Compute the magnetizations of the hidden units
-            m_t[k], m_nmg[k] = self.analyzeMagnetizations( X_red[ind], L_arr[k], BM.W )
-            
-            
+            data[k,5:]  = self.analyzeMagnetizations( X_red[ind], data[k,0], BM.W )
+
+        # Compute the RE averaged only on the errors
+        if np.any( counts[:,1] ):
+            perf['REE'] = perf['MRE']*size/np.sum( counts[:,1] )
+        else:
+            perf['REE'] = 0
+        
+        # Analyze overlap hidden configurations related to the given set, if required 
+        if overlap:
+            q = self.analyzeOverlap( BM.h, m=500 )
+        else:
+            q = None
+
+        ############### Store and print the results                         
         # Print the 10-top reconstructions (arbitrarily chosen as the first occurrence of such examples)  
         if BM.N < 100:
             # Sort in descendent order the number of correct reconstructions
             np.set_printoptions( linewidth = 1000, formatter={'all':lambda x: str(x) if x > 0 else '_'} )
-            ind_ord = np.argsort( -corr )  
+            ind_ord = np.argsort( -counts[:,0] )  
             X_top = X_red[ ind_ord ]
             ind_top = ind_red[ind_ord]
             
@@ -289,42 +315,38 @@ class Analyzer:
                 # Print the correspondent reconstructions
                 print( BM.v[ind_top[k],1:].astype(int), end="\t\t"  )                
                 # Print the correspondent "performance" for all their occurrences 
-                print( corr[ind_ord[k]].astype(int), "\t", wrong[ind_ord[k]].astype(int) )
+                print( counts[:,0][ind_ord[k]].astype(int), "\t", counts[:,1][ind_ord[k]].astype(int) )
                 # Print the correspondent hidden vectors
                 print( '[', ''.join(self.__formatVectors( BM.h[ind_top[k],1:] )), "]\n" )
 
             # Give the "performance" statistics of the top-10 w.r.t. the entire set X 
             np.set_printoptions( precision = 2, suppress= True, linewidth = 1000)
-            corr_top = np.sum( corr[ind_ord[:nPrints]] )
-            wrong_top = np.sum( wrong[ind_ord[:nPrints]] )
+            corr_top = np.sum( counts[:,0][ind_ord[:nPrints]] )
+            wrong_top = np.sum( counts[:,1][ind_ord[:nPrints]] )
             print( ' '*2*BM.N, "\t\t{}%\t{}%\n".format( corr_top/size*100, wrong_top/size*100 ) )
         
-        # Compute the RE averaged only on the errors
-        if np.any( wrong ):
-            RE = MRE*size/np.sum(wrong)
-        else:
-            RE = 0
-
-        # Store and print the results         
-        res = [MRE, RE , nCorrect, L_arr, S_arr, np.mean( m_t ), np.mean(m_nmg), np.mean( r), \
-            np.mean( h_max ), np.mean( h_nmg_max), corr, wrong]
+        # Create a dataframe of the measurements
+        df = pd.DataFrame( data, columns=['L', 'S', 'r', 'h_max', 'h_nmg', 'm_t', 'm_nmg'] )
+        counts = pd.DataFrame( counts, columns=['corr', 'wrong'] )
+        perf_2 = pd.DataFrame( perf, index=[0] )
         
-        L_mean = np.mean( res[3] )
-        S_mean = np.mean( res[4] )
+        # Compute mean values of the series
+        means = df.mean(axis=0)
 
         print( "Size set = ", size )
-        print( "MRE = {:.2f} ".format( res[0] ) )
-        print( "REE  = {:.2f} ".format(  res[1] ) )
-        print( "Correct reconstructions = {:.2f} %".format( res[2] ) )
-        print( "L_mean = {:.2f}".format(  L_mean ) )
-        print( "S_mean = {:.2f}".format(  S_mean ) )
-        print( "I_mean = {:.2f}".format(  BM.M - L_mean - S_mean ) )
-        print( "m_tilde = {:.2f}".format( res[5] ) ) 
-        print( "m_nonmag = {:.2f}".format( res[6] ) )
-        print( "sqrt(r) = {:.2f} ".format( res[7] ) )
-        print( "delta = {:.2f}\n".format( res[8]-res[9] ) )
+        for key, value in perf.items():
+            if value != None:
+                print( key, ' = {:.2f}'.format( value ) ) 
+
+        print( "L_mean = {:.2f}".format(  means['L'] ) )
+        print( "S_mean = {:.2f}".format(  means['S'] ) )
+        print( "I_mean = {:.2f}".format(  BM.M - means['L'] - means['S'] ) )
+        print( "m_tilde = {:.2f}".format( means['m_t'] ) ) 
+        print( "m_nonmag = {:.2f}".format( means['m_nmg'] ) )
+        print( "sqrt(r) = {:.2f} ".format( means['r'] ) )
+        print( "delta = {:.2f}\n".format( means['h_max']-means['h_nmg'] ) )
         
-        return res
+        return perf_2, df, counts, q
 
     """
     Function to make the different plots necessary for the analysis.
@@ -339,12 +361,6 @@ class Analyzer:
 
 
         if not pams['useMNIST']:
-            #f = plt.figure()
-            #f.suptitle( "Percentage of errors: {:.2f} %".format( count_e/len(dataset)*100 ) )
-            #ax1 = plt.subplot2grid((1,1),(0,0))
-            #ax1.matshow( dataset[0:50,1:], cmap="Greys_r",aspect='equal' )
-            #ax1.set_xticks([]); ax1.set_yticks([])         
-            
             f = plt.figure()
             axprops = dict(xticks=[], yticks=[])
             num_bars  = 10
@@ -356,9 +372,11 @@ class Analyzer:
         
         # Display reconstruction error over the epochs             
         f, axarr = plt.subplots(2, sharex=True)
+        
         # Mean Reconstruction Error
         axarr[0].plot([i for i in range( pams['nEpochs'] )], fit_res[0])
         axarr[0].set_ylabel('MRE')
+        
         # Percentage of correct reconstructions
         axarr[1].plot([i for i in range( pams['nEpochs'] )], fit_res[1])
         axarr[1].set_ylabel('Correct %')
@@ -381,34 +399,36 @@ class Analyzer:
         plt.show() 
         
         # Weights colormap
-        fig,ax  = plt.subplots(figsize=(8,8))
-        plt.title( 'Learned features\n' )
-        
-        # Define an ad-hoc colorbar
         vmax =  max( np.abs( BM.W[1:,1:].flatten() ) )  
         vmax2 =  max( np.abs( BM.W.flatten() ) ) 
-        if vmax2 - vmax > 1:
-            cmap_bounds = np.concatenate( (np.arange(-vmax2, -vmax, 0.5),\
-                np.arange(-vmax, vmax, 0.01), np.arange(vmax, vmax2, 0.5)  ) )
-        else:
-            cmap_bounds = np.concatenate( (np.arange(-vmax2, -vmax, 0.1),\
-                np.arange(-vmax, vmax, 0.01), np.arange(vmax, vmax2, 0.1)  ) )            
-        cmap = cm.get_cmap('RdBu_r',lut=len(cmap_bounds)+1)
-        norm = mcl.BoundaryNorm(cmap_bounds,cmap.N)    
-        
-        # Plot the colormap
-        im = ax.matshow(  BM.W.T, cmap =cmap, norm=norm )
-        ax.set_xticks(np.arange(0, BM.N+5, 5, dtype=int))
-        ax.set_yticks(np.arange(0, BM.M+5, 5, dtype=int))
-        ax.tick_params(labelbottom=False, labeltop=True, labelleft=True, labelright=False,
-                        bottom=False, top=True, left=True, right=False)
-        
-        # Orientate the colorbar in the figure
-        if BM.N > BM.M:   fig.colorbar(im, orientation='horizontal', pad =0.04, ticks=np.arange(-int(vmax), int(vmax)+1) )
-        else:       fig.colorbar(im, orientation='vertical', pad =0.04, ticks=np.arange(-int(vmax), int(vmax)+1))
+        if not pams['useMNIST']:
 
-        plt.savefig( os.path.join(self.curr_dir, 'Plots', 'colormap.png' ),bbox_inches='tight' )
-        
+            fig,ax  = plt.subplots(figsize=(8,8))
+            plt.title( 'Learned features\n' )
+            
+            # Define an ad-hoc colorbar
+            if vmax2 - vmax > 1:
+                cmap_bounds = np.concatenate( (np.arange(-vmax2, -vmax, 0.5),\
+                    np.arange(-vmax, vmax, 0.005), np.arange(vmax, vmax2, 0.5)  ) )
+            else:
+                cmap_bounds = np.concatenate( (np.arange(-vmax2, -vmax, 0.1),\
+                    np.arange(-vmax, vmax, 0.005), np.arange(vmax, vmax2, 0.1)  ) )            
+            cmap = cm.get_cmap('RdBu_r',lut=len(cmap_bounds)+1)
+            norm = mcl.BoundaryNorm(cmap_bounds,cmap.N)    
+            
+            # Plot the colormap
+            im = ax.matshow(  BM.W.T, cmap =cmap, norm=norm )
+            ax.set_xticks(np.arange(0, BM.N+5, 5, dtype=int))
+            ax.set_yticks(np.arange(0, BM.M+5, 5, dtype=int))
+            ax.tick_params(labelbottom=False, labeltop=True, labelleft=True, labelright=False,
+                            bottom=False, top=True, left=True, right=False)
+            
+            # Orientate the colorbar in the figure
+            if BM.N > BM.M:   fig.colorbar(im, orientation='horizontal', pad =0.04, ticks=np.arange(-int(vmax), int(vmax)+1) )
+            else:       fig.colorbar(im, orientation='vertical', pad =0.04, ticks=np.arange(-int(vmax), int(vmax)+1))
+
+            plt.savefig( os.path.join(self.curr_dir, 'Plots', 'colormap.png' ),bbox_inches='tight' )
+            
         # Hidden state example 
         f = plt.figure(figsize=(6,8))
         f.suptitle( 'Example of feature detection' )
@@ -423,29 +443,48 @@ class Analyzer:
         print( "Indices sorted hidden units:", ind+ 1 )
 
         # Define a grid
-        outer = gridspec.GridSpec(3, 1, height_ratios = [2, 1,1]) 
-        gs1 = gridspec.GridSpecFromSubplotSpec(1, 1, subplot_spec = outer[0])   
+        outer = gridspec.GridSpec(3, 1, height_ratios = [4, 1,1]) 
+        gs1 = gridspec.GridSpecFromSubplotSpec(2, 1, subplot_spec = outer[0])   
         gs2 = gridspec.GridSpecFromSubplotSpec(1, 1, subplot_spec = outer[1])
-        gs3 = gridspec.GridSpecFromSubplotSpec(L_0, 1, subplot_spec = outer[2], hspace=0)
-        
+        if not pams['useMNIST']:
+            gs3 = gridspec.GridSpecFromSubplotSpec(L_0, 1, subplot_spec = outer[2], hspace=0)
+            shapes = (1, BM.N)
+        else:
+            gs3 = gridspec.GridSpecFromSubplotSpec(1, L_0, subplot_spec = outer[2], hspace=0)
+            shapes = (28, 28)
+
+            
         # Plot the activations
         ax = plt.subplot( gs1[0,:] )
         ax.bar( np.arange( 1, BM.M+1, dtype=np.int ),  BM.h[0,1:], align='center' )
         ax.set_xticks(np.arange( 0, BM.M+5,5, dtype=np.int )  )
         
+        # Plot the activations
+        ax = plt.subplot( gs1[1,:] )
+        ax.bar( np.arange( 1, BM.M+1, dtype=np.int ),  np.dot( BM.W.T[1:,1:], X_test[0,1:]), align='center' )
+        ax.set_xticks(np.arange( 0, BM.M+5,5, dtype=np.int )  )
+
         # Plot the test example
         ax = plt.subplot( gs2[0,:] )
-        ax.matshow( X_test[0,1:].reshape(1,BM.N),cmap ='Greys_r' )
+            
+        ax.matshow( X_test[0,1:].reshape( shapes ),cmap ='Greys_r' )
+    
         ax.set_yticks([]);ax.set_xticks([]); ax.set_adjustable('box-forced')
         ax.set_title( 'Input' )
         
         # Plot the features vectors of the magnetized units
         for i in range( L_0 ):
-            if i == 0:
-                ax.set_title( 'Weights\nTop-L units', multialignment='center' )
             # Make nested gridspecs
-            ax = plt.subplot( gs3[i,:] )
-            ax.matshow( BM.W[1:,ind[-i-1]+1].reshape(1,BM.N),cmap ="RdBu_r", vmin=-vmax, vmax=vmax )
+            if not pams['useMNIST']:
+                ax = plt.subplot( gs3[i,:] )
+                if i == 0:
+                    ax.set_title( 'Weights\nTop-L units', multialignment='center' )
+            else:
+                ax = plt.subplot( gs3[0,i] )
+                if i == 2:
+                    ax.set_title( 'Weights\nTop-L units', multialignment='center' )
+                
+            ax.matshow( BM.W[1:,ind[-i-1]+1].reshape( shapes ),cmap ="RdBu_r", vmin=-vmax, vmax=vmax )
             ax.set_yticks([]); ax.set_xticks([])
             ax.set_adjustable('box-forced')
         
@@ -505,6 +544,7 @@ class Analyzer:
             writer = csv.writer(csvfile, quoting=csv.QUOTE_NONE)
             
             # Store hyperparameters
+            writer.writerow([])
             writer.writerow( [ str(datetime.datetime.now()) ] )
             writer.writerow( ['ReLU_RBM', 'N', 'M', 'LA',  'SGS', 'p_01', 'p_10'] )
             writer.writerow( [pars['useReLU'], pars['N'], pars['M'], pars['LA'], pars['SGS'], pars['p_01'], pars['p_10']] )
@@ -525,7 +565,7 @@ class Analyzer:
             writer.writerows( tmp )
             writer.writerow([])
 
-    def saveDataset( self, X_train, X_test, res_train, res_test, BM ):
+    def saveDataset( self, X_train, X_test, corr_train, wrong_train, corr_test, wrong_test, BM ):
         # Save the statistics of the dataset in a CSV file, 
         # together with the perfomance of the last RBM
         if BM.N < 100:
@@ -536,6 +576,7 @@ class Analyzer:
             # Get reconstructions 
             BM.GibbsSampling( v_init = X_red )
             X_rec, X_h = np.copy( BM.v ), np.copy( BM.h )
+            
             BM.GibbsSampling( v_init = Y_red )
             Y_rec, Y_h = np.copy( BM.v ), np.copy( BM.h )
             
@@ -552,7 +593,7 @@ class Analyzer:
             with open(os.path.join(self.curr_dir, 'Results','dataset.csv'), 'w') as csvfile:            
                 writer = csv.writer(csvfile)
                 writer.writerow( ['Training_set'] )
-                writer.writerow([ 'Size=' + str( np.sum( res_train[10] ) + np.sum( res_train[11] ) )] )
+                writer.writerow([ 'Size=' + str( len(X_train) )  ] )
                 writer.writerow( ["Example", "Sample", "Hidden_state", "Unique?", "Total", "Right", "Wrong"] )
     
                 # Write formatted reconstructions and check if they belong to the test set, correspondet hidden vectors and
@@ -563,10 +604,10 @@ class Analyzer:
                     else:                         uniqueness = True
                     
                     writer.writerow( [ X_red_str[i], X_rec_str[i], X_h_str[i], uniqueness,\
-                        res_train[10][i]+res_train[11][i],  res_train[10][i], res_train[11][i]  ] )
+                        corr_train[i]+wrong_train[i],  corr_train[i], wrong_train[i]  ] )
 
                 writer.writerow( ['Test_set'] )
-                writer.writerow([ 'Size=' + str( np.sum( res_test[10] ) + np.sum( res_test[11] ) )] )
+                writer.writerow([ 'Size=' + str( len(X_test)  )] )
                 writer.writerow( ["Example", "Sample", "Hidden_state", "Unique?", "Total", "Right", "Wrong"] )
 
                 # Write formatted reconstructions and check if they belong to the training set, correspondet hidden vectors and
@@ -575,5 +616,6 @@ class Analyzer:
                     if Y_red_str[i] in X_red_str: uniqueness = False
                     else:                         uniqueness = True
                     
-                    writer.writerow( [ Y_red_str[i], Y_rec_str[i], Y_h_str[i], uniqueness, res_test[10][i]+res_test[11][i],  res_test[10][i], res_test[11][i]  ] )
+                    writer.writerow( [ Y_red_str[i], Y_rec_str[i], Y_h_str[i], uniqueness,\
+                        corr_test[i]+wrong_test[i],  corr_test[i], wrong_test[i]  ] )
 

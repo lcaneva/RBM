@@ -40,7 +40,7 @@ def getParameters():
                 pars['p_01'] = 0.01
                 pars['p_10'] = 0.005
 
-        pars['invert'] = True
+        pars['invert'] = False
 
 
     # Learning algorithm
@@ -59,10 +59,10 @@ def getParameters():
     pars['x'] = 3
 
     # Epsilon decaying coefficient
-    pars['c_e'] = 0.975
+    pars['c_e'] = 0
 
     # Alpha growth coefficient
-    pars['c_a'] = 1.01
+    pars['c_a'] = 0
 
     # Percentage of the dataset that will form the training set
     pars['ratioTest'] = 1.

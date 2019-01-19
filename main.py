@@ -20,7 +20,8 @@ To-do list:
 """
 
 import os     
-import sys    
+import sys
+import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
 from pudb import set_trace
@@ -67,15 +68,23 @@ dataset = np.insert( dataset, 0, 1, axis = 1)
 # Use hold-out technique to avoid overfitting
 X_train, X_test = train_test_split( dataset, test_size=pars['ratioTest']/(1.+pars['ratioTest']), random_state = pars['seedTr'])
 
+# Estimate mean activation of visible units from data
 g_init = np.sum( dataset, axis = 0 )/len(dataset)
-    
-###############  Learning phase 
-# Define a matrix to store the results
-fields = ['nC_last', 'nC_train','nC_test','RE_last', 'RE_train', 'RE_test', 'Sparsity',\
-        'Theta_mean', 'g_mean', 'L_mean', 'I_mean', 'S_mean', 'm_tilde', 'm_mean', 'sqrt(r)',\
-          'h_max', 'Delta', 'Temp', 'W^2' ] 
-results = np.zeros( (pars['nRuns'], len(fields)) )
 
+
+# Define the names of the numerical results that must be saved
+fields_perf = ['nC_last','nC_train','nC_test','nC_cond_test', 'REE_last', 'REE_train', 'REE_test'] 
+fields_weights = ['Sparsity', 'Sparsity_2','Theta_mean', 'g_mean']
+fields_confs = ['L_mean', 'I_mean', 'S_mean', 'm_tilde', 'm_mean', 'sqrt(r)',  'h_max', 'Delta', 'Temp', 'W^2' ] 
+    
+l1 = len(fields_perf)
+l2 = len(fields_weights)
+l3 = len(fields_confs)
+
+# Initialize a numpy array to store the numerical results
+results = np.zeros( (pars['nRuns'], l1+l2+l3) )
+
+###############  Learning phase 
 # Repeat the learning n times in order to obtain a more reliable statistics
 for k in range( pars['nRuns'] ):
 
@@ -84,68 +93,69 @@ for k in range( pars['nRuns'] ):
     else:                     BM = BaseRBM(  pars['N'], pars['M'], pars['seedBM'], g_init )
     
     ############### Learn the data model
-    MRE_fit, nCorrect_fit, sparsity_fit, ovf = BM.fit( X_train, X_test, pars['LA'], pars['SGS'], pars['nMB'],\
+    MRE, nCorrect, sparsity, ovf = BM.fit( X_train, X_test, pars['LA'], pars['SGS'], pars['nMB'],\
         pars['nEpochs'], pars['epsilon'], pars['alpha'], pars['x'], pars['lambda_x'],pars['c_e'], pars['c_a'],\
         pars['period'], pars['plots'], pars['useProb'] )
     
     # Save the final model
     np.save( os.path.join(curr_dir, 'Results', 'final_weights.npy'), BM.W )
+    
     # Create a list for the plots
-    fit_res = [MRE_fit, nCorrect_fit, sparsity_fit, ovf[0,:], ovf[1,:] ]
+    fit_series = [MRE, nCorrect, sparsity, ovf[0,:], ovf[1,:] ]
     
     ############### Analyze the final weights
     print( "========== Final weights ==========" )    
-
     analyzer = Analyzer( BM.N, BM.M )
-    p, p_vis, p_hid, T = analyzer.analyzeWeights( BM.W )    
+    p, p_2, p_vis, p_hid, T = analyzer.analyzeWeights( BM.W )    
     print( "Thresholds:", BM.W[0] )
     print( "Max element of BM.W: {:.2f}".format(  np.max( np.abs( BM.W.flatten() ) ) ) )
     print( "Sparsity: {:.2f}".format( p ) )
-    input()
-        
-    ############### Analyze the perfomance of the RBM
+    print( "Sparsity (full PR): {:.2f}".format( p_2 ) )
     
+    ############### Analyze the perfomance of the RBM
     # Perfomance on the last mini-batch of the training set 
     print( "=========== Last MB training set results ===========" )
-    res_last = analyzer.analyzePerfomance( X_train[-sizeMB:], BM )
+    perf_last, __, __, __ = analyzer.analyzeStates( X_train[-sizeMB:], BM )
+
     # Perfomance on the training set 
     print( "=========== Training set results ===========" )
-    res_train = analyzer.analyzePerfomance( X_train, BM )
+    perf_train, df_train, counts_train, __ = analyzer.analyzeStates( X_train, BM )
+
     # Perfomance on the test set
     print( "=========== Test set results ===========" )
-    res_test = analyzer.analyzePerfomance( X_test, BM )
+    perf_test, df_test, counts_test, q = analyzer.analyzeStates( X_test, BM, cond=True, overlap=True )
     
-    # Analyze overlap hidden configurations related to the test set 
-    q = analyzer.analyzeOverlap( X_test, m=500 )
+    # Concatenate the two measurments dataframes 
+    # (since the measures are independent of the type of set considered, i.e. training or test )
+    df_tot = pd.concat( [df_train, df_test] )
+    avgs   = df_tot.mean( axis = 0 )
     
-    # Concatenate the values that are independent on the type of set considered
-    L =  np.append( res_train[3], res_test[3] ) 
-    S =  np.append( res_train[4], res_test[4] )
-    
-    # Average measurements independent on the type of set considered
-    m_tilde = (res_train[5]+res_test[5])/2
-    m_nonmag = (res_train[6]+res_test[6])/2 
-    r = (res_train[7]+res_test[7])/2
-    h_max = (res_train[8]+res_test[8])/2
-    h_nonmag_max = (res_train[9]+res_test[9])/2
-    
+    # Add column suffixes
+    perf_last  = perf_last.add_suffix('_last')
+    perf_train = perf_train.add_suffix('_train')
+    perf_test  = perf_test.add_suffix('_test')
 
+    # Concatenate the three performance dataframes
+    perf = pd.concat( [perf_last, perf_train, perf_test], axis=1 )
+    
     ############### Save the numerical results                
-    # Write numerical results for the comparison of test and training data
-    results[ k, : ] = np.array( [res_last[2], res_train[2], res_test[2], res_last[1], res_train[1], res_test[1],\
-                                p, -np.mean( BM.W[0,1:] ), -np.mean( BM.W[1:,0] ),  np.mean(L), BM.M-np.mean(L)-np.mean(S), np.mean(S),\
-                                m_tilde,  m_nonmag, np.sqrt( r ), h_max, h_max-h_nonmag_max,  T,\
-                                np.linalg.norm( BM.W[1:,1:] )**2 ] )
+    # Write numerical results for the comparison of test and training data    
+    results[ k, :l1 ] = perf[fields_perf].values
+    results[ k, l1:l1+l2] = np.array([p, p_2, -np.mean( BM.W[0,1:] ), -np.mean( BM.W[1:,0] )])
+    results[ k, l1+l2:l1+l2+l3] = np.array([avgs['L'], BM.M-avgs['L']-avgs['S'], avgs['S'],avgs['m_t'], avgs['m_nmg'],\
+        np.sqrt( avgs['r'] ), avgs['h_max'],avgs['h_max']-avgs['h_nmg'],  T, np.linalg.norm( BM.W[1:,1:] )**2 ] )
 
     ############### Make plots    
     if pars['plots'] and k == 0:       
-        analyzer.makePlots( pars, X_test, fit_res, L, S, q, BM ) 
+        analyzer.makePlots( pars, X_test, fit_series, df_tot['L'].values, df_tot['S'].values, q, BM ) 
         pars['plots'] = False
         
     input( "Continue?" )
         
         
 ######## File outputs    
+fields = fields_perf + fields_weights + fields_confs
 analyzer.saveResults( pars, fields, results )
 np.save( os.path.join(curr_dir, 'Results', 'results.npy'), results )
-analyzer.saveDataset( X_train, X_test, res_train, res_test, BM )
+analyzer.saveDataset( X_train, X_test, counts_train['corr'].values, counts_train['wrong'].values,\
+    counts_test['corr'], counts_test['wrong'], BM )
