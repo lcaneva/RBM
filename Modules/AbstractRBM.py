@@ -90,6 +90,7 @@ class AbstractRBM(ABC):
     In order to be independent from the size of the mini-batches, the learning scale is scaled in the updating rule.
     """
     def fit( self, X_train, X_test, LA , SGS,  nMB, nEpochs, epsilon, alpha, x, lambda_x,  c_e, c_a, period_ovf, plots, useProb  ):
+
         # Initialize counter for the energies and sampling period
         counter = 0
         analyzer = Analyzer( self.N, self.M )
@@ -104,17 +105,17 @@ class AbstractRBM(ABC):
         # Initialize arrays for the statistics
         MRE = np.zeros( nEpochs, dtype = float )
         nCorrect = np.zeros( nEpochs, dtype = float )
-        p_arr = np.zeros( int(nEpochs/period_ovf), dtype = float )        
+        sparsity = np.zeros( int(nEpochs/period_ovf), dtype = float )        
         ovf = np.zeros( (2,  int(nEpochs/period_ovf)), dtype = float )
         
-        # DEBUG
-        #bias_up = np.zeros( (nEpochs, nMB) )
-        #epsilon_0 = epsilon
+        bias_up = np.zeros( (nEpochs, nMB, self.M) )
+        epsilon_0 = epsilon
+        alpha_0 = alpha
         
         # Initialize velocity
         velocity = np.zeros( (self.N+1, self.M+1) )        
         
-        # Iterate through X_train nEpochs times
+        # Iterate over X_train nEpochs times
         for t in range( nEpochs ):
             for ind in np.random.permutation( nMB ):
                 if ind < nMB-1:
@@ -130,18 +131,16 @@ class AbstractRBM(ABC):
                 elif LA == 'PCD':
                     W_updates = epsilon*( 1./len(MB) * self.PCD( MB, SGS, sizeMB, useProb ) - lambda_x * self.regularize( x )  )
                     
-                # DEBUG
-                #bias_up[t,ind] = W_updates[0,1]
-
                 # Update the velocity
                 velocity =  W_updates + alpha*velocity
-                
+
                 #Update the weights (one time per MB)
                 self.W += velocity
  
             # Compute and print statistics of the current epoch
             print("---------------Epoch {}--------------".format(t+1))
-            MRE[t], nCorrect[t] = self.reconstructionScore( X_val )            
+            self.GibbsSampling( X_val )
+            MRE[t], nCorrect[t] = self.reconstructionScore( X_val, self.v )            
             
             print( "Mean Squared Error = ", MRE[t] )
             print( "Correct reconstructions (%%) = %.2f \n" % nCorrect[t] ) 
@@ -150,21 +149,31 @@ class AbstractRBM(ABC):
             if plots and (t % period_ovf == 0):
                 # Compute the energies and the sparsity of the model
                 ovf[:, counter] = self.monitorOverfitting( X_train[:len_val], X_val )
-                p_arr[counter], __, T = analyzer.analyzeWeights( self.W ) 
+                sparsity[counter],__, __, __, T = analyzer.analyzeWeights( self.W ) 
                 counter += 1
 
             # DEBUG
             #MRE[t] = W_updates[0,1] 
 
-            # Increase alpha and decrease epsilon towards the end of learning
-            #epsilon = epsilon_0* np.exp(-0.01*t)
-            if t > nEpochs*0.5:
-                epsilon *= c_e
-                if alpha < 0.9: alpha *= c_a
+            # Increase alpha and decrease epsilon while learning progresses
+            epsilon = epsilon_0* np.exp(-c_e*(t+1.)/nEpochs)
+            if alpha < 0.9: 
+                alpha = alpha_0* np.exp(c_a*(t+1.)/nEpochs)
 
         # DEBUG
+        import matplotlib.pyplot as plt
+        plt.figure()
+        for i in range( self.M ):
+            plt.plot( np.arange(nEpochs), np.sum( bias_up, axis = 1 )[:,i] )
+        plt.figure()
+        plt.plot( np.arange(nEpochs), np.sum( bias_up, axis = 1 )[:,0] )
+        plt.plot( np.arange(nEpochs), [np.mean( np.sum( bias_up, axis = 1 )[10:,0] )]*nEpochs )
+        plt.plot( np.arange(nEpochs), [0]*nEpochs )
+        
+        plt.show()
+        # DEBUG
         #np.save('debug.npy', bias_up)
-        return MRE, nCorrect, p_arr, ovf
+        return MRE, nCorrect, sparsity, ovf
         
 
     """
@@ -179,13 +188,22 @@ class AbstractRBM(ABC):
     of Monasson's article at page 2.
     """
     def regularize( self, x ):
-        # Determine the signs of the weights
+        ## Determine the signs of the weights
         W_updates = np.zeros( (self.N+1, self.M+1) )
         W_updates[1:,1:] = np.sign( self.W[1:,1:] )
         
-        W_abs = np.abs( self.W )
-        coeffs = np.power( np.sum( W_abs[1:, 1:], axis = 0 ), x-1 )
+        # Use the weights to calibrate the update (one for each hidden unit)
+        coeffs = np.power( np.sum( np.abs( self.W[1:, 1:] ), axis = 0 ), x-1 )
         W_updates[1:,1:] = np.multiply( W_updates[1:,1:], coeffs )
+                
+        ## Determine the signs of the weights
+        #W_updates = np.zeros( (self.N+1, self.M+1) )
+        #W_updates = np.sign( self.W )
+
+        
+        ## Use the weights to calibrate the update (one for each hidden unit)
+        #coeffs = np.power( np.sum( np.abs( self.W ), axis = 0 ), x-1 )
+        #W_updates = np.multiply( W_updates, coeffs )
 
         return W_updates
     
@@ -319,17 +337,17 @@ class AbstractRBM(ABC):
     """
     def monitorOverfitting( self, X_train, X_test):            
         ## Average free energies
-        #avg_train = self.freeEnergy( X_train, self.W )/len(X_train)
-        #avg_test =  self.freeEnergy( X_test,  self.W )/len(X_test)
+        avg_train = self.freeEnergy( X_train, self.W )/len(X_train)
+        avg_test =  self.freeEnergy( X_test,  self.W )/len(X_test)
         
         # Approximated log-likelihod
-        p = np.mean( X_train, axis = 0 )
-        Z_approx = self.AIS_2( K=10000, n_tot = 100, p=p[1:] )
-        Z_exact = self.partition()
-        print( Z_approx, Z_exact )
-        input()
-        avg_train = -self.freeEnergy( X_train, self.W )/len(X_train) - np.log(Z_approx)
-        avg_test =  -self.freeEnergy( X_test,  self.W )/len(X_test) - np.log(Z_approx)
+        #p = np.mean( X_train, axis = 0 )
+        #Z_approx = self.AIS_2( K=10000, n_tot = 100, p=p[1:] )
+        #Z_exact = self.partition()
+        #print( Z_approx, Z_exact )
+        #input()
+        #avg_train = -self.freeEnergy( X_train, self.W )/len(X_train) - np.log(Z_approx)
+        #avg_test =  -self.freeEnergy( X_test,  self.W )/len(X_test) - np.log(Z_approx)
         
         ## DEBUG
         #print( avg_train )
@@ -343,16 +361,21 @@ class AbstractRBM(ABC):
     ---------------------------------------------------------
     Input: 
         X, set of examples
+        v_rec, set of reconstructions
     
     Evaluate the mean reconstruction error over the set X and
     the number of correct reconstructions as a percentage.
     """
-    def reconstructionScore( self, X, SGS = 1 ):
-            # Obtain the reconstructions given by the machine
-            self.GibbsSampling( v_init = X, SGS = SGS )
-            
+    def reconstructionScore( self, X, v_rec, SGS = 1 ):
+            ## Obtain the reconstructions given by the machine
+            #if not average:
+                #self.GibbsSampling( v_init = X, SGS = SGS )
+                #v_rec = self.v
+            #else:
+                #v_rec = self.findMaxima( X )
+                
             # Compute their distance from the real visible states
-            dist = np.linalg.norm( X-self.v, axis = 1 )
+            dist = np.linalg.norm( X-v_rec, axis = 1 )
             MRE = np.sum( np.power( dist, 2 ) )
             nCorrect = np.sum( dist == 0 )
             
@@ -580,3 +603,44 @@ class AbstractRBM(ABC):
             for v in vecs:
                 Z += np.exp( -self.freeEnergy( np.array(v), self.W ) )
             return Z
+        
+    
+    
+    def findMaxima( self, X, K = 25 ):
+        if X.ndim > 1:
+            # Initialize a vector to store the averaged reconstructions
+            v_rec_avg = np.zeros( (len(X),self.N+1 ) )
+            
+            # Iterate over the input set
+            for ind, v in enumerate(X):
+                # Construct a mini-batch of identical copies of the same input vector
+                V = np.tile( v, (K,1) )
+                    
+                # Get the correspondent hidden states
+                self.updateHidden( V )
+                
+                # Compute the conditional average of the hidden states
+                h_avg = np.mean( self.h, axis = 0 )
+                
+                # Return to the visible layer
+                self.updateVisible( h_avg )
+                
+                # Save the result
+                v_rec_avg[ ind ] = self.v 
+        else:
+           # Construct a mini-batch of identical copies of the same input vector
+                V = np.tile( X, (K,1) )
+                    
+                # Get the correspondent hidden states
+                self.updateHidden( V )
+                
+                # Compute the conditional average of the hidden states
+                h_avg = np.mean( self.h, axis = 0 )
+                
+                # Return to the visible layer
+                self.updateVisible( h_avg )
+                
+                # Save the result
+                v_rec_avg = self.v 
+                
+        return v_rec_avg
