@@ -25,6 +25,7 @@ def getParameters():
 
         # Length of the categories
         pars['l'] = 10
+
         # Probabilities for noisy clamping
         if pars['N'] <= 5:
             pars['p_01'] = 0.15
@@ -101,6 +102,5 @@ def getParameters():
     pars['epsilon'] = float(args["epsilon"])
     pars['lambda_x'] = float(args["lambda"])
     pars['plots'] = (args["plots"] != "0")
-
 
     return pars

@@ -48,7 +48,6 @@ print( "========== Chosen parameters ==========" )
 print( pars )
 input( "Continue?" )
 
-
 # Compute the size of the minibatches
 sizeMB = int( pars['sizeTrain']/ pars['nMB'] )
 

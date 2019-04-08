@@ -90,10 +90,9 @@ class AbstractRBM(ABC):
     In order to be independent from the size of the mini-batches, the learning scale is scaled in the updating rule.
     """
     def fit( self, X_train, X_test, LA , SGS,  nMB, nEpochs, epsilon, alpha, x, lambda_x,  c_e, c_a, period_ovf, plots, useProb  ):
-        # Initialize counter for the energies plots
+
+        # Initialize counter for the energies and sampling period
         counter = 0
-        
-        # Construct an Analyzer object
         analyzer = Analyzer( self.N, self.M )
         
         # Define a validation set
@@ -109,7 +108,6 @@ class AbstractRBM(ABC):
         sparsity = np.zeros( int(nEpochs/period_ovf), dtype = float )        
         ovf = np.zeros( (2,  int(nEpochs/period_ovf)), dtype = float )
         
-        # DEBUG
         bias_up = np.zeros( (nEpochs, nMB, self.M) )
         epsilon_0 = epsilon
         alpha_0 = alpha
@@ -133,9 +131,6 @@ class AbstractRBM(ABC):
                 elif LA == 'PCD':
                     W_updates = epsilon*( 1./len(MB) * self.PCD( MB, SGS, sizeMB, useProb ) - lambda_x * self.regularize( x )  )
                     
-                # DEBUG
-                bias_up[t,ind,:] = W_updates[0,1:]
-
                 # Update the velocity
                 velocity =  W_updates + alpha*velocity
 
@@ -196,7 +191,6 @@ class AbstractRBM(ABC):
         ## Determine the signs of the weights
         W_updates = np.zeros( (self.N+1, self.M+1) )
         W_updates[1:,1:] = np.sign( self.W[1:,1:] )
-
         
         # Use the weights to calibrate the update (one for each hidden unit)
         coeffs = np.power( np.sum( np.abs( self.W[1:, 1:] ), axis = 0 ), x-1 )
@@ -610,7 +604,6 @@ class AbstractRBM(ABC):
                 Z += np.exp( -self.freeEnergy( np.array(v), self.W ) )
             return Z
         
-        
     
     
     def findMaxima( self, X, K = 25 ):
@@ -651,4 +644,3 @@ class AbstractRBM(ABC):
                 v_rec_avg = self.v 
                 
         return v_rec_avg
-        

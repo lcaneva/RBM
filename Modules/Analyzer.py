@@ -65,7 +65,7 @@ class Analyzer:
     layer,  the self-threshold, i.e. the link with the bias unit, is discarded.
     """
     def analyzeWeights( self, W ):
-        ## Compute average sparsity
+        # Compute average sparsity
         p = 0
         for mu in range( 1, self.M +1 ):
             p += self.__PR( W[1:, mu], 2 )
@@ -184,7 +184,6 @@ class Analyzer:
             m_nmg = 1.0/self.M * np.sum( m )
             
         return m_tilde, m_nmg
-
     
     """
     Compute the overlap between the different hidden states.
@@ -347,7 +346,6 @@ class Analyzer:
         print( "delta = {:.2f}\n".format( means['h_max']-means['h_nmg'] ) )
         
         return perf_2, df, counts, q
-
     """
     Function to make the different plots necessary for the analysis.
     -----------------------------------------------------------------
@@ -453,7 +451,6 @@ class Analyzer:
             gs3 = gridspec.GridSpecFromSubplotSpec(1, L_0, subplot_spec = outer[2], hspace=0)
             shapes = (28, 28)
 
-            
         # Plot the activations
         ax = plt.subplot( gs1[0,:] )
         ax.bar( np.arange( 1, BM.M+1, dtype=np.int ),  BM.h[0,1:], align='center' )
@@ -576,7 +573,7 @@ class Analyzer:
             # Get reconstructions 
             BM.GibbsSampling( v_init = X_red )
             X_rec, X_h = np.copy( BM.v ), np.copy( BM.h )
-            
+
             BM.GibbsSampling( v_init = Y_red )
             Y_rec, Y_h = np.copy( BM.v ), np.copy( BM.h )
             
