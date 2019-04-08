@@ -6,11 +6,15 @@ The folder Modules contains all the objects and functions used in the main scrip
 - <code>Parameters.py</code> specifies all the hyperparameters of the model that are usually fixed, while the fine-tuned ones are obtained from command line.
 - <code>Datasets.py</code> contains the functions needed for the generation of the Encoder problem instances or for reading the MNIST dataset. 
 - The experimental analysis is performed through the <code>Analyzer</code> class, which takes also into account the I/O interface. In order to run the code, one needs to specify the most important hyperparameters by command line while calling <code>main.py</code>, e.g:
-	      `$ python main.py -e 200 -nMB 2 -s 5000 -lr 0.5 -lam 5e-3 -p 0` <br>
+	      `$ python main.py -dt GEP -N 40 -M 20  -nMB 50 -s 5000 -e 200 -lr 0.05 -lam 5e-3 -t 0 -ph FM` <br>
 where:
-	- e = number of epochs for the training phase
+        - dt = type of dataset (Generalized Encoder Problem, Bars&Stripes, MNIST etc.)
+        - N = number of visible units
+        - M = number of hidden units
 	- nMB = number of mini-batches
 	- s = size of the training set
+	- e = number of epochs for the training phase
 	- lr = learning rate
 	- lam = weights cost	
-	- p = bool to activate plots
+        - t = initial value of the biases of the hidden units
+        - ph = prefix string to save the results

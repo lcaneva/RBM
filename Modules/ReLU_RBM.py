@@ -10,20 +10,19 @@ class ReLU_RBM( AbstractRBM ):
     
     """
     Constructor.
-    ----------------------------------------------
-    Use parent class Constructor, except for the
-    probabilities vectors of the hidden units 
-    that are not defined.
+    --------------------------------------------------------------------
+    Use parent class Constructor, except for the  probabilities vectors
+    of the hidden units that are not defined.
     """    
-    def __init__( self, N, M, seed, p=np.empty(0) ):
+    def __init__( self, N, M, seed, theta_init, g_init=np.empty(0) ):
         # Initialize probabilities vectors
         self.vp = np.empty( N+1, dtype = float )                        
-        super().__init__( N,M,seed, p )
+        super().__init__( N,M,seed, theta_init, g_init )
 
 
     """
     Computation of the visible state from a hidden one.
-    ---------------------------------------------------
+    ---------------------------------------------------------------------
     Input arguments:
         x, input hidden state or mini-batch
         useProb, bool to specify if only probabilities should be used
@@ -32,6 +31,7 @@ class ReLU_RBM( AbstractRBM ):
     the visible state of the machine, if required. 
     """
     def updateVisible( self, x, useProb = False ):
+        # Determine if x is a vector or a matrix
         if x.ndim == 1:
             net = np.dot( self.W, x )            
             self.vp = special.expit( net )
@@ -58,8 +58,7 @@ class ReLU_RBM( AbstractRBM ):
     """
     def __phi( self, x ):
         # Add gaussian noise with null mean  and unit variance
-        # to all preactivations of the hidden units 
-        # given in input
+        # to all preactivations of the hidden units given in input
         if x.ndim == 1:
             y = x +  np.random.randn( self.M + 1 )
         else:
@@ -77,6 +76,8 @@ class ReLU_RBM( AbstractRBM ):
     ---------------------------------------------------
     Input arguments:
         x, input visible state
+        useProb, bool to avoid sampling (useful to maintain the interface of BaseRBMs)
+        W, specific weight matrix
         
     Update the hidden state of the machine. 
     """
@@ -110,22 +111,22 @@ class ReLU_RBM( AbstractRBM ):
             part_net = np.dot( W.T[1:,1:], X[1:] )
             net =  part_net + W[0,1:]
             arg_log = np.prod( np.sqrt( np.pi/(2*beta) )*special.erfc( np.sqrt( beta/2 )*net ) ) 
-            # DEBUG
-            # The different sign of the \theta term is due to the fact that I use a convention
-            # different from Monasson, i.e. \theta = - \theta_{Monasson}
-            # N.B: net could have been computed just in the usual way
             en_eff = 0.5*np.linalg.norm( net )**2 +  np.log( arg_log )
             return -en_g - en_eff
         else:
             # Local fields energies (one for each example in X)
-            en_g = np.dot( X, W[:,0] )
+            en_g = np.dot( X, W[:,0] )            
+
             # Compute effective energy
             part_net = np.dot( X[:,1:], W[1:,1:] )   
             thresholds = np.tile( W[0,1:], (len(part_net),1) ) 
+
             # Use Hinton's convention and not Monasson's one
             net = part_net + thresholds
             arg_log = np.prod( np.sqrt( np.pi/(2*beta) )*special.erfc( np.sqrt( beta/2 )*net ), axis=1 ) 
-            en_eff = 0.5*np.power( np.linalg.norm( net, axis=1 ), 2 ) + np.log( arg_log )
+            en_eff = 0.5*np.power( np.linalg.norm( net, axis=1 ), 2 )            
+            en_eff += np.log( arg_log )
+            
             return -np.sum(en_g) - np.sum(en_eff)
 
 

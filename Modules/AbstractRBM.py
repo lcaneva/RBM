@@ -7,7 +7,6 @@ from Analyzer import Analyzer
 # Class for generic Restricted Boltzmann Machines
 ##################################################
 class AbstractRBM(ABC):
-    
     """
     Constructor.
     -------------
@@ -15,11 +14,12 @@ class AbstractRBM(ABC):
         N, number of visible units
         M, number of hidden units
         seed, integer to initialize the RNG
-        p, array used to initialize the visible biases according to the statistics of the training examples 
+        theta_init, initial value of the hidden units biases
+        g_init, array used to initialize the visible biases according to the statistics of the training examples 
         
     Define a RBM with N+1 visible units (the first of which is the bias unit)  and M+1 hidden units. 
     """
-    def __init__(self, N, M, seed = None, p=np.empty(0)):
+    def __init__(self, N, M, seed,  theta_init, g_init=np.empty(0)):
             # Initialize the random state, if required
             np.random.seed(seed)
             
@@ -44,33 +44,37 @@ class AbstractRBM(ABC):
             Each row, for i >= 1, corresponds to all the weights that connect the i-th
             visible unit to the hidden layer and to itself (bias, for \mu = 0).
             In particular:
-                w_{i,0} = activation threshold of the i-th visible unit = g_i (cfr Monasson)
-                w_{0,\mu} = activation threshold of the \mu-th hidden unit = g_\mu (if gaussian)
+                w_{i,0} = activation threshold of the i-th visible unit = g_i (cfr. Monasson)
+                w_{0,\mu} = activation threshold of the \mu-th hidden unit = \theta_\mu 
             The configurations will need a starting "1" to take account of these biases
             during the propagation of the signal between the layers.
-            Notice that g_i is -\theta_i in the notation of Ackley and also g_{\mu} = -\theta{mu}. 
-            Finally, the proper weights are initialized using He's method based on uniform distribution
-            while the biases are set to null values.
+            Notice that g_i is -\theta_i in the notation of Ackley. 
+            The proper weights are initialized using Glorot's method based on uniform distribution.
             """            
             self.W = np.empty( (N+1, M+1), dtype = float  )
             
-            # He's initialization
-            r = np.sqrt(6/(N+M))
-            self.W[1:,1:] = np.random.rand( N, M )*2*r - r 
+            # Glorot's initialization
+            r = np.sqrt(6./(N+M))
+            self.W[1:,1:] = np.random.rand( N, M )*2*r - r
+            
+            # Hinton's initialization
+            #self.W[1:,1:] = 0.01*np.random.randn( N,M )
             
             # Biases initialization
-            self.W[0,:] = 0
-            for i in range(1,len(p)):
-                if p[i] > 0:
-                    self.W[i,0] = np.log( p[i]/(1.-p[i]) ) 
+            self.W[0,:] = theta_init
+            for i in range(1,len(g_init)):
+                if g_init[i] > 0:
+                    self.W[i,0] = np.log( g_init[i]/(1.-g_init[i]) ) 
                 else:
                     self.W[i,0] = 0
-                
+            
+            print( 'Initial visible biases: ', self.W[:,0] )
+
     """
     Learning algorithm.
     -------------------
     Input arguments:
-        X_train, input mini-batch as a matrix of size (sizeMB x N+1) 
+        X_train, input set as a matrix of size (sizeTrain x N+1) 
         X_test, test set as a matrix of size (sizeTest x N+1 )
         LA, string that specifies the learning algorithm (Contrastive Divergence, Persistent CD, etc)
         Steps Gibbs Sampling, number of sampling steps in the Contrastive Divergence Markov Chain 
@@ -90,12 +94,13 @@ class AbstractRBM(ABC):
     In order to be independent from the size of the mini-batches, the learning scale is scaled in the updating rule.
     """
     def fit( self, X_train, X_test, LA , SGS,  nMB, nEpochs, epsilon, alpha, x, lambda_x,  c_e, c_a, period_ovf, plots, useProb  ):
-
-        # Initialize counter for the energies and sampling period
+        # Initialize counter for the energies plots
         counter = 0
+        
+        # Construct an Analyzer object
         analyzer = Analyzer( self.N, self.M )
         
-        # Define a validation set
+        # Define a small validation set
         len_val = int(0.1*len(X_test))
         X_val = X_test[:len_val]
                 
@@ -108,12 +113,12 @@ class AbstractRBM(ABC):
         sparsity = np.zeros( int(nEpochs/period_ovf), dtype = float )        
         ovf = np.zeros( (2,  int(nEpochs/period_ovf)), dtype = float )
         
-        bias_up = np.zeros( (nEpochs, nMB, self.M) )
-        epsilon_0 = epsilon
-        alpha_0 = alpha
-        
         # Initialize velocity
         velocity = np.zeros( (self.N+1, self.M+1) )        
+        
+        # Initialize learning parameters
+        epsilon_0 = epsilon
+        alpha_0 = alpha
         
         # Iterate over X_train nEpochs times
         for t in range( nEpochs ):
@@ -136,7 +141,7 @@ class AbstractRBM(ABC):
 
                 #Update the weights (one time per MB)
                 self.W += velocity
- 
+        
             # Compute and print statistics of the current epoch
             print("---------------Epoch {}--------------".format(t+1))
             self.GibbsSampling( X_val )
@@ -152,27 +157,11 @@ class AbstractRBM(ABC):
                 sparsity[counter],__, __, __, T = analyzer.analyzeWeights( self.W ) 
                 counter += 1
 
-            # DEBUG
-            #MRE[t] = W_updates[0,1] 
-
             # Increase alpha and decrease epsilon while learning progresses
             epsilon = epsilon_0* np.exp(-c_e*(t+1.)/nEpochs)
             if alpha < 0.9: 
                 alpha = alpha_0* np.exp(c_a*(t+1.)/nEpochs)
 
-        # DEBUG
-        import matplotlib.pyplot as plt
-        plt.figure()
-        for i in range( self.M ):
-            plt.plot( np.arange(nEpochs), np.sum( bias_up, axis = 1 )[:,i] )
-        plt.figure()
-        plt.plot( np.arange(nEpochs), np.sum( bias_up, axis = 1 )[:,0] )
-        plt.plot( np.arange(nEpochs), [np.mean( np.sum( bias_up, axis = 1 )[10:,0] )]*nEpochs )
-        plt.plot( np.arange(nEpochs), [0]*nEpochs )
-        
-        plt.show()
-        # DEBUG
-        #np.save('debug.npy', bias_up)
         return MRE, nCorrect, sparsity, ovf
         
 
@@ -188,23 +177,27 @@ class AbstractRBM(ABC):
     of Monasson's article at page 2.
     """
     def regularize( self, x ):
-        ## Determine the signs of the weights
+        #### LASSO-like
+        # Determine the signs of the weights
         W_updates = np.zeros( (self.N+1, self.M+1) )
         W_updates[1:,1:] = np.sign( self.W[1:,1:] )
-        
+
         # Use the weights to calibrate the update (one for each hidden unit)
         coeffs = np.power( np.sum( np.abs( self.W[1:, 1:] ), axis = 0 ), x-1 )
         W_updates[1:,1:] = np.multiply( W_updates[1:,1:], coeffs )
-                
+        
+        #### Regularize also thresholds and biases
         ## Determine the signs of the weights
-        #W_updates = np.zeros( (self.N+1, self.M+1) )
-        #W_updates = np.sign( self.W )
-
+        # W_updates = np.zeros( (self.N+1, self.M+1) )
+        # W_updates = np.sign( self.W )
         
         ## Use the weights to calibrate the update (one for each hidden unit)
-        #coeffs = np.power( np.sum( np.abs( self.W ), axis = 0 ), x-1 )
-        #W_updates = np.multiply( W_updates, coeffs )
-
+        # coeffs = np.power( np.sum( np.abs( self.W ), axis = 0 ), x-1 )
+        # W_updates = np.multiply( W_updates, coeffs )
+        
+        #### L2
+        # W_updates[1:,1:] = 2*self.W[1:,1:]
+        
         return W_updates
     
     """
@@ -247,7 +240,7 @@ class AbstractRBM(ABC):
         
     """
     Gibbs Sampling function.
-    -----------------------
+    ----------------------------------------
     Input arguments: 
         v_init, initial state (if present) of the machine in the visible layer
         h_init, initial hidden state of the machine, if present
@@ -256,6 +249,7 @@ class AbstractRBM(ABC):
     Create a MCMC either from a visible or a hidden state that makes the machine  daydream for SGS steps.
     """
     def GibbsSampling( self, v_init = np.empty(0), h_init = np.empty(0), SGS = 1, useProb = False ):
+            # Check if the number of steps is positive
             if SGS <= 0: return -1
             # Check if the chain should start from a visible state
             if v_init.size > 0:
@@ -306,6 +300,7 @@ class AbstractRBM(ABC):
                         self.updateHidden(  self.v )
                
             return 0
+
     """
     Computation of the hidden state correspondent to an input visible one.
     ------------------------------------------------------------------------
@@ -330,30 +325,24 @@ class AbstractRBM(ABC):
         X_train, training set (at least a subset)
         X_test,  test set
 
-    As explained in Hinton's guide, use the comparison   of the average free energies of the two sets of visibile instances 
-    to monitor the overfitting.
-    # DEBUG
-    As explained in Monasson's article and in Hinton's guide, use the comparison of the average log-likelihood of the two sets of visibile instances  to monitor the overfitting.
+    As explained in Hinton's guide, use the comparison   of the average free energies of
+    the two sets of visibile instances  to monitor the overfitting.
+    Alpha version: Use also the comparison of the average log-likelihood.
     """
     def monitorOverfitting( self, X_train, X_test):            
         ## Average free energies
         avg_train = self.freeEnergy( X_train, self.W )/len(X_train)
         avg_test =  self.freeEnergy( X_test,  self.W )/len(X_test)
         
-        # Approximated log-likelihod
-        #p = np.mean( X_train, axis = 0 )
-        #Z_approx = self.AIS_2( K=10000, n_tot = 100, p=p[1:] )
-        #Z_exact = self.partition()
-        #print( Z_approx, Z_exact )
-        #input()
-        #avg_train = -self.freeEnergy( X_train, self.W )/len(X_train) - np.log(Z_approx)
-        #avg_test =  -self.freeEnergy( X_test,  self.W )/len(X_test) - np.log(Z_approx)
+        ## Approximated log-likelihod
+        # p = np.mean( X_train, axis = 0 )
+        # Z_approx = self.AIS_2( K=10000, n_tot = 100, p=p[1:] )
+        # Z_exact = self.partition()
+        # print( Z_approx, Z_exact )
+        # input()
+        # avg_train = -self.freeEnergy( X_train, self.W )/len(X_train) - np.log(Z_approx)
+        # avg_test =  -self.freeEnergy( X_test,  self.W )/len(X_test) - np.log(Z_approx)
         
-        ## DEBUG
-        #print( avg_train )
-        #print( -self.freeEnergy( X_train, self.W )/len(X_train) )
-        #print( np.log(Z_approx) )
-        #input()
         return avg_train, avg_test
 
     """
@@ -364,17 +353,10 @@ class AbstractRBM(ABC):
         v_rec, set of reconstructions
     
     Evaluate the mean reconstruction error over the set X and
-    the number of correct reconstructions as a percentage.
+    the percentage of correct reconstructions.
     """
-    def reconstructionScore( self, X, v_rec, SGS = 1 ):
-            ## Obtain the reconstructions given by the machine
-            #if not average:
-                #self.GibbsSampling( v_init = X, SGS = SGS )
-                #v_rec = self.v
-            #else:
-                #v_rec = self.findMaxima( X )
-                
-            # Compute their distance from the real visible states
+    def reconstructionScore( self, X, v_rec, SGS = 1 ):                
+            # Compute the distance from the real visible states
             dist = np.linalg.norm( X-v_rec, axis = 1 )
             MRE = np.sum( np.power( dist, 2 ) )
             nCorrect = np.sum( dist == 0 )
@@ -415,7 +397,6 @@ class AbstractRBM(ABC):
         # Again, obtain a matrix in R^{ N+1, M+1 }
         delta_neg = np.dot( self.v_chains.T, self.h_chains )
         
-        
         # Return the update for the weights (and biases) 
         return  delta_pos - delta_neg 
 
@@ -428,8 +409,8 @@ class AbstractRBM(ABC):
         K, total number of samplings
         
     Get an approximation of the partition function of an RBM, using the AIS algorithm 
-    defined in Salakhutdinov's article. In particular, it is considered a reference
-    RBM, denoted as A, with null weight matrix and null ReLU-thresholds as the starting point
+    defined in Salakhutdinov's article. The reference RBM denoted as A is considered
+    having a null weight matrix and null ReLU-thresholds for the starting point
     of the annealing.
     """
     def AIS( self, K, n_tot ):
@@ -445,18 +426,17 @@ class AbstractRBM(ABC):
         Z_A = np.sqrt(np.pi/2)**self.M * np.prod( 1 + np.exp( self.W[1:,0] ) )
         
         ## Reference RBM with null weights but non-null ReLU thresholds
-        ##W_A[0,:] = self.W[0,:] 
-        ##term_hidden = 1.0
-        ##for mu in range( self.M ):
-            ##theta = W_A[0, mu+1]
-            ##term_hidden *= np.exp( -theta**2/2.0 )*np.sqrt( np.pi/2.0 )
-            ##if theta > 0:
-                ##term_hidden *= 1 + special.erf( theta/np.sqrt(2) )
-            ##elif theta < 0:
-                ##term_hidden *= special.erfc( -theta/np.sqrt(2) )
-        ##Z_A = np.prod( 1.0 + np.exp( self.W[1:,0] ) )*term_hidden
+        # W_A[0,:] = self.W[0,:] 
+        # term_hidden = 1.0
+        # for mu in range( self.M ):
+            # theta = W_A[0, mu+1]
+            # term_hidden *= np.exp( -theta**2/2.0 )*np.sqrt( np.pi/2.0 )
+            # if theta > 0:
+                # term_hidden *= 1 + special.erf( theta/np.sqrt(2) )
+            # elif theta < 0:
+                # term_hidden *= special.erfc( -theta/np.sqrt(2) )
+        # Z_A = np.prod( 1.0 + np.exp( self.W[1:,0] ) )*term_hidden
         
-
         # Define the marginalized distribution for the reference RBM
         p_A = special.expit( self.W[1:,0] )
         
@@ -500,9 +480,11 @@ class AbstractRBM(ABC):
                     # Update the i-th importance weight
                     # Check if beta_next == 1.0
                     if k < K-1:
-                        w[i] +=   -self.freeEnergy( v_curr, W_A, 1.0-beta_next )-self.freeEnergy( v_curr, self.W, beta_next ) + self.freeEnergy( v_curr, W_A, 1.0-beta_curr ) + self.freeEnergy( v_curr, self.W, beta_curr )
+                        w[i] +=   -self.freeEnergy( v_curr, W_A, 1.0-beta_next )-self.freeEnergy( v_curr, self.W, beta_next )\
+                            + self.freeEnergy( v_curr, W_A, 1.0-beta_curr ) + self.freeEnergy( v_curr, self.W, beta_curr )
                     else:
-                        w[i] +=  -self.freeEnergy( v_curr,self.W, beta_next ) +self.freeEnergy( v_curr, W_A,1.0-beta_curr ) + self.freeEnergy( v_curr, self.W, beta_curr ) 
+                        w[i] +=  -self.freeEnergy( v_curr,self.W, beta_next ) +self.freeEnergy( v_curr, W_A,1.0-beta_curr )\
+                            + self.freeEnergy( v_curr, self.W, beta_curr ) 
         
             w[i] = np.exp( w[i] )
                 
@@ -510,87 +492,12 @@ class AbstractRBM(ABC):
         return Z_approx
         
         
+
+    """ 
+    Compute exactly the partition function.
+    -------------------------------------------------------------------
+    Return immediately when the size of the system is too large.
     """
-    Annealed Importance Sampling algorithm.
-    -----------------------------------------
-    Input arguments: 
-        n_tot, total number of runs (that is M in the notation of Salakhutdinov)
-        K, total number of samplings
-        
-    Get an approximation of the partition function of an RBM, using the AIS algorithm 
-    defined in Salakhutdinov's article. In particular, it is considered a reference
-    RBM, denoted as A, with null weight matrix and null ReLU-thresholds as the starting point
-    of the annealing.
-    """
-    def AIS_2( self, K, n_tot, p ):
-        def __pstar( v, W_A, beta ):
-            
-            p_star = np.exp( (1-beta)*np.dot(W_A[1:,0], v[1:]) )* np.prod( 1+np.exp((1-beta)*np.dot(W_A.T, v ) ) )
-            p_star *= np.exp( beta*np.dot(self.W[1:,0], v[1:]) ) * np.prod( 1+np.exp(beta*np.dot(self.W.T, v ) ) ) 
-            
-            return p_star
-            
-        # Define importance weights
-        w = np.zeros( n_tot )
-        
-        # Define the weight matrix for the reference RBM 
-        W_A = np.zeros( (self.N+1, self.M+1), dtype = float )
-        W_A[1:,0] = np.log( np.divide( p, 1-p ) ) 
-        
-        # Compute Z for the reference RBM
-        # Reference RBM with null weights and ReLU thresholds
-        Z_A = np.power( np.sqrt(np.pi/2), self.M ) * np.prod( 1 + np.exp( W_A[1:,0] ) )
-
-        # Define the marginalized distribution for the reference RBM
-        p_A = special.expit( W_A[1:,0] )
-        
-        # Repeat n_tot times the annealing
-        for i in range( n_tot ):
-            # Generate the v's sequence
-            for k in range( K ):
-                # Define the inverse temperatures for the transition operator 
-                # and the computation of w_i
-                beta_curr = k*1.0/K
-                beta_next = (k+1)*1.0/K
-
-                if k == 0:
-                    # Define the visible vector that spans the sequence v_1, ..., v_K
-                    v_curr =  np.zeros( self.N, dtype= float )
-                    # Add a dimension for the biases
-                    v_curr = np.insert( v_curr, 0, 1, axis = 0)
-        
-                    # Sample v_1 through the marginalized of the reference RBM
-                    y = np.random.rand( self.N ) 
-                    v_curr[1:] = (y <= p_A)
-                    
-                    # Compute the starting contribution to w: p^*_1(v_1)/p^*_0(v_1)
-                    w[i] =  __pstar( v_curr, W_A, beta_next ) /__pstar( v_curr, W_A, beta_curr ) 
-                    
-                else:                        
-                    # Compute h_A
-                    self.updateHidden( (1-beta_curr) * v_curr, W = W_A )
-                    net = (1-beta_curr) * np.dot( W_A, self.h )
-                    
-                    # Compute h_B
-                    self.updateHidden( beta_curr * v_curr )
-                    net +=  beta_curr * np.dot( self.W, self.h )
-                    
-                    # Update v_curr through h_A, h_B 
-                    vp = special.expit( net )
-                    vp[0] = 1 
-                    # Sample v_curr
-                    y = np.random.rand( self.N+1  )
-                    v_curr = (y <= vp )                     
-                
-                    # Update the i-th importance weight
-                    w[i] *= __pstar( v_curr, W_A, beta_next )/__pstar(v_curr,W_A, beta_curr)
-                    
-            #w[i] = np.exp( w[i] )
-                
-        Z_approx = np.mean( w ) * Z_A
-        return Z_approx
-
-
     def partition( self ):
         if self.N >= 20: 
             return
@@ -604,8 +511,13 @@ class AbstractRBM(ABC):
                 Z += np.exp( -self.freeEnergy( np.array(v), self.W ) )
             return Z
         
-    
-    
+        
+    """
+    Compute maxima of the free energy.
+    --------------------------------------------------------------
+    Use Monasson's sampling to get the maxima of the free energy
+    (cfr. Supplemental Material page 5).
+    """
     def findMaxima( self, X, K = 25 ):
         if X.ndim > 1:
             # Initialize a vector to store the averaged reconstructions
@@ -644,3 +556,4 @@ class AbstractRBM(ABC):
                 v_rec_avg = self.v 
                 
         return v_rec_avg
+        

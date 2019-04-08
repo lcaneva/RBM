@@ -28,6 +28,7 @@ class BaseRBM( AbstractRBM ):
     Input arguments:
         x, input visible state or mini-batch
         useProb, bool to specify whether only probabilities should be used
+        W, specific weight matrix (useful for AIS) 
         
     Update the vector of probabilities of activations of the hidden units, together with 
     the hidden state of the machine, if required. 
@@ -37,6 +38,7 @@ class BaseRBM( AbstractRBM ):
         if W.size == 0:
             W = self.W
        
+        # Determine if x is a vector or a matrix
         if x.ndim == 1:
             net = np.dot( W.T, x )            
             self.hp = special.expit( net )
@@ -69,6 +71,7 @@ class BaseRBM( AbstractRBM ):
     the visible state of the machine, if required. 
     """
     def updateVisible( self, x, useProb = False ):
+        # Determine if x is a vector or a matrix
         if x.ndim == 1:
             net = np.dot( self.W, x )
             self.vp = special.expit( net )
